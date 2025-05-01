@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  api-gateway:
+    build:
+      context: ./apps/api-gateway
+    ports:
+      - "8080:8080"
+    depends_on:
+      - signaling-service
+      - ingest-service
+
+  signaling-service:
+    build:
+      context: ./apps/signaling-service
+    ports:
+      - "50051:50051"
+
+  ingest-service:
+    build:
+      context: ./apps/ingest-service
+    ports:
+      - "50052:50052"

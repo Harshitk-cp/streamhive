@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package ingest;
+
+option go_package = "/libs/proto/ingest";
+
+message IngestRequest {
+  string stream_id = 1;
+  bytes data = 2;
+}
+
+message IngestResponse {
+  string status = 1;
+}
+
+service IngestService {
+  rpc IngestStream(IngestRequest) returns (IngestResponse);
+}

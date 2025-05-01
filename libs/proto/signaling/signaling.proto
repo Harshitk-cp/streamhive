@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package signaling;
 
-option go_package = "github.com/Harshitk-cp/streamhive/libs/proto/signaling";
+option go_package = "libs/proto/signaling";
 
 message SignalRequest {
   string session_id = 1;
