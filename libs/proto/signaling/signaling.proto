@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package signaling;
+
+option go_package = "github.com/Harshitk-cp/streamhive/libs/proto/signaling";
+
+message SignalRequest {
+  string session_id = 1;
+  string payload = 2;
+}
+
+message SignalResponse {
+  string status = 1;
+}
+
+service SignalingService {
+  rpc SendSignal(SignalRequest) returns (SignalResponse);
+}
