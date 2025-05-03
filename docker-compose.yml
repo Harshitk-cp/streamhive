@@ -3,21 +3,44 @@ version: '3.8'
 services:
   api-gateway:
     build:
-      context: ./apps/api-gateway
+      context: .
+      dockerfile: apps/api-gateway/Dockerfile
     ports:
-      - "8080:8080"
+      - "8080:8080"  # Keeping this the same
+      - "50051:50051"  # Exposing gRPC port
+    environment:
+      - CONFIG_PATH=/app/config/config.yaml
+    volumes:
+      - ./apps/api-gateway/config:/app/config
     depends_on:
-      - signaling-service
-      - ingest-service
+      - stream-router
+      - rtmp-ingestor
 
-  signaling-service:
+  stream-router:
     build:
-      context: ./apps/signaling-service
+      context: .
+      dockerfile: apps/stream-router/Dockerfile
     ports:
-      - "50051:50051"
+      - "8082:8081"  # External:Internal - 8081 is what it's listening on internally
+      - "9090:9090"  # gRPC port
+    volumes:
+      - ./apps/stream-router/config:/src/config
+    environment:
+      - HTTP_ADDRESS=:8081
+      - GRPC_ADDRESS=:9090
 
-  ingest-service:
+  rtmp-ingestor:
     build:
-      context: ./apps/ingest-service
+      context: .
+      dockerfile: apps/rtmp-ingestor/Dockerfile
     ports:
-      - "50052:50052"
+      - "8083:8081"  # Changed to avoid clash with stream-router internal port
+      - "1935:1935"  # RTMP port
+    volumes:
+      - ./apps/rtmp-ingestor/config:/src/config
+    environment:
+      - HTTP_ADDRESS=:8081
+      - RTMP_ADDRESS=:1935
+      - ROUTER_ADDRESS=stream-router:9090
+    depends_on:
+      - stream-router

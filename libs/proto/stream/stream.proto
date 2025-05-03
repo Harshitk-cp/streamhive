@@ -1,0 +1,340 @@
+syntax = "proto3";
+
+package router.v1;
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/wrappers.proto";
+
+option go_package = "libs/proto/stream";
+
+// StreamService handles stream management and routing
+service StreamService {
+  // Stream management
+  rpc CreateStream(CreateStreamRequest) returns (Stream);
+  rpc GetStream(GetStreamRequest) returns (Stream);
+  rpc UpdateStream(UpdateStreamRequest) returns (Stream);
+  rpc DeleteStream(DeleteStreamRequest) returns (google.protobuf.Empty);
+  rpc ListStreams(ListStreamsRequest) returns (ListStreamsResponse);
+
+  // Stream operations
+  rpc StartStream(StartStreamRequest) returns (StartStreamResponse);
+  rpc StopStream(StopStreamRequest) returns (google.protobuf.Empty);
+  rpc GetStreamEvents(GetStreamEventsRequest) returns (GetStreamEventsResponse);
+
+  // Stream metadata
+  rpc GetStreamMetadata(GetStreamMetadataRequest) returns (GetStreamMetadataResponse);
+  rpc SetStreamMetadata(SetStreamMetadataRequest) returns (GetStreamMetadataResponse);
+  rpc UpdateStreamMetadata(UpdateStreamMetadataRequest) returns (GetStreamMetadataResponse);
+  rpc DeleteStreamMetadataField(DeleteStreamMetadataFieldRequest) returns (google.protobuf.Empty);
+
+  // Stream outputs
+  rpc AddStreamOutput(AddStreamOutputRequest) returns (StreamOutput);
+  rpc RemoveStreamOutput(RemoveStreamOutputRequest) returns (google.protobuf.Empty);
+
+  // Stream enhancements
+  rpc AddStreamEnhancement(AddStreamEnhancementRequest) returns (StreamEnhancement);
+  rpc UpdateStreamEnhancement(UpdateStreamEnhancementRequest) returns (StreamEnhancement);
+  rpc RemoveStreamEnhancement(RemoveStreamEnhancementRequest) returns (google.protobuf.Empty);
+
+  // Webhooks
+  rpc RegisterWebhook(RegisterWebhookRequest) returns (RegisterWebhookResponse);
+  rpc UnregisterWebhook(UnregisterWebhookRequest) returns (google.protobuf.Empty);
+  rpc ListWebhooks(ListWebhooksRequest) returns (ListWebhooksResponse);
+  rpc TestWebhook(TestWebhookRequest) returns (google.protobuf.Empty);
+
+  // Internal methods (service-to-service)
+  rpc UpdateStreamStatus(UpdateStreamStatusRequest) returns (google.protobuf.Empty);
+  rpc UpdateStreamMetrics(UpdateStreamMetricsRequest) returns (google.protobuf.Empty);
+  rpc ValidateStreamKey(ValidateStreamKeyRequest) returns (ValidateStreamKeyResponse);
+}
+
+// Stream represents a live stream
+message Stream {
+  string id = 1;
+  string user_id = 2;
+  string title = 3;
+  string description = 4;
+  string status = 5;
+  string visibility = 6;
+  repeated string tags = 7;
+  repeated StreamInput inputs = 8;
+  repeated StreamOutput outputs = 9;
+  repeated StreamEnhancement enhancements = 10;
+  StreamMetrics metrics = 11;
+  google.protobuf.Timestamp created_at = 12;
+  google.protobuf.Timestamp updated_at = 13;
+  bool recording = 14;
+  string thumbnail = 15;
+  string region = 16;
+  map<string, string> metadata = 17;
+}
+
+// StreamInput represents an input source for a stream
+message StreamInput {
+  string id = 1;
+  string protocol = 2;
+  string url = 3;
+  bool backup = 4;
+  repeated string servers = 5;
+}
+
+// StreamOutput represents an output destination for a stream
+message StreamOutput {
+  string id = 1;
+  string protocol = 2;
+  string url = 3;
+  repeated string enabled_for = 4;
+  string format = 5;
+  bool drm_enabled = 6;
+  bool cdn_enabled = 7;
+}
+
+// StreamEnhancement represents a processing filter for a stream
+message StreamEnhancement {
+  string id = 1;
+  string type = 2;
+  bool enabled = 3;
+  int32 priority = 4;
+  map<string, string> settings = 5;
+}
+
+// StreamMetrics contains metrics for a stream
+message StreamMetrics {
+  int32 viewer_count = 1;
+  int32 peak_viewer_count = 2;
+  google.protobuf.Timestamp start_time = 3;
+  google.protobuf.Timestamp end_time = 4;
+  int64 duration = 5;
+  int32 ingest_bitrate = 6;
+  int32 output_bitrate = 7;
+  double frame_rate = 8;
+  string resolution = 9;
+}
+
+// StreamEvent represents an event for a stream
+message StreamEvent {
+  string id = 1;
+  string stream_id = 2;
+  string type = 3;
+  google.protobuf.Timestamp timestamp = 4;
+  bytes data = 5;
+}
+
+// Webhook represents a webhook subscription
+message Webhook {
+  string id = 1;
+  string user_id = 2;
+  string stream_id = 3;
+  string url = 4;
+  repeated string events = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
+// CreateStreamRequest is used to create a new stream
+message CreateStreamRequest {
+  string title = 1;
+  string description = 2;
+  string visibility = 3;
+  repeated string tags = 4;
+  bool recording = 5;
+  string region = 6;
+  map<string, string> metadata = 7;
+}
+
+// GetStreamRequest is used to get a stream
+message GetStreamRequest {
+  string id = 1;
+}
+
+// UpdateStreamRequest is used to update a stream
+message UpdateStreamRequest {
+  string id = 1;
+  google.protobuf.StringValue title = 2;
+  google.protobuf.StringValue description = 3;
+  google.protobuf.StringValue visibility = 4;
+  repeated string tags = 5;
+  google.protobuf.BoolValue recording = 6;
+  google.protobuf.StringValue region = 7;
+  map<string, string> metadata = 8;
+}
+
+// DeleteStreamRequest is used to delete a stream
+message DeleteStreamRequest {
+  string id = 1;
+}
+
+// ListStreamsRequest is used to list streams
+message ListStreamsRequest {
+  string status = 1;
+  string visibility = 2;
+  repeated string tags = 3;
+  int32 limit = 4;
+  int32 offset = 5;
+  string sort_by = 6;
+  string sort_order = 7;
+}
+
+// ListStreamsResponse contains the response to a list streams request
+message ListStreamsResponse {
+  repeated Stream streams = 1;
+  int32 count = 2;
+  int32 limit = 3;
+  int32 offset = 4;
+}
+
+// StartStreamRequest is used to start a stream
+message StartStreamRequest {
+  string stream_id = 1;
+  string protocol = 2;
+  map<string, string> settings = 3;
+}
+
+// StartStreamResponse contains the response to a start stream request
+message StartStreamResponse {
+  string stream_id = 1;
+  string input_url = 2;
+  string stream_key = 3;
+  string backup_url = 4;
+  string server_id = 5;
+  string backup_id = 6;
+}
+
+// StopStreamRequest is used to stop a stream
+message StopStreamRequest {
+  string stream_id = 1;
+  bool force = 2;
+}
+
+// GetStreamEventsRequest is used to get events for a stream
+message GetStreamEventsRequest {
+  string stream_id = 1;
+  int32 limit = 2;
+  int32 offset = 3;
+}
+
+// GetStreamEventsResponse contains the response to a get stream events request
+message GetStreamEventsResponse {
+  repeated StreamEvent events = 1;
+  int32 count = 2;
+  int32 limit = 3;
+  int32 offset = 4;
+}
+
+// GetStreamMetadataRequest is used to get metadata for a stream
+message GetStreamMetadataRequest {
+  string stream_id = 1;
+}
+
+// GetStreamMetadataResponse contains the response to a get stream metadata request
+message GetStreamMetadataResponse {
+  map<string, string> metadata = 1;
+}
+
+// SetStreamMetadataRequest is used to set metadata for a stream
+message SetStreamMetadataRequest {
+  string stream_id = 1;
+  map<string, string> metadata = 2;
+}
+
+// UpdateStreamMetadataRequest is used to update metadata for a stream
+message UpdateStreamMetadataRequest {
+  string stream_id = 1;
+  map<string, string> updates = 2;
+}
+
+// DeleteStreamMetadataFieldRequest is used to delete a metadata field for a stream
+message DeleteStreamMetadataFieldRequest {
+  string stream_id = 1;
+  string key = 2;
+}
+
+// AddStreamOutputRequest is used to add an output to a stream
+message AddStreamOutputRequest {
+  string stream_id = 1;
+  StreamOutput output = 2;
+}
+
+// RemoveStreamOutputRequest is used to remove an output from a stream
+message RemoveStreamOutputRequest {
+  string stream_id = 1;
+  string output_id = 2;
+}
+
+// AddStreamEnhancementRequest is used to add an enhancement to a stream
+message AddStreamEnhancementRequest {
+  string stream_id = 1;
+  StreamEnhancement enhancement = 2;
+}
+
+// UpdateStreamEnhancementRequest is used to update an enhancement for a stream
+message UpdateStreamEnhancementRequest {
+  string stream_id = 1;
+  StreamEnhancement enhancement = 2;
+}
+
+// RemoveStreamEnhancementRequest is used to remove an enhancement from a stream
+message RemoveStreamEnhancementRequest {
+  string stream_id = 1;
+  string enhancement_id = 2;
+}
+
+// RegisterWebhookRequest is used to register a webhook
+message RegisterWebhookRequest {
+  string url = 1;
+  repeated string events = 2;
+  string secret = 3;
+  string stream_id = 4;
+}
+
+// RegisterWebhookResponse contains the response to a register webhook request
+message RegisterWebhookResponse {
+  string webhook_id = 1;
+  string url = 2;
+  repeated string events = 3;
+  string stream_id = 4;
+}
+
+// UnregisterWebhookRequest is used to unregister a webhook
+message UnregisterWebhookRequest {
+  string webhook_id = 1;
+}
+
+// ListWebhooksRequest is used to list webhooks
+message ListWebhooksRequest {
+  string stream_id = 1;
+}
+
+// ListWebhooksResponse contains the response to a list webhooks request
+message ListWebhooksResponse {
+  repeated Webhook webhooks = 1;
+  int32 count = 2;
+}
+
+// TestWebhookRequest is used to test a webhook
+message TestWebhookRequest {
+  string webhook_id = 1;
+}
+
+// UpdateStreamStatusRequest is used to update a stream's status
+message UpdateStreamStatusRequest {
+  string stream_id = 1;
+  string status = 2;
+}
+
+// UpdateStreamMetricsRequest is used to update a stream's metrics
+message UpdateStreamMetricsRequest {
+  string stream_id = 1;
+  StreamMetrics metrics = 2;
+}
+
+// ValidateStreamKeyRequest is used to validate a stream key
+message ValidateStreamKeyRequest {
+  string stream_id = 1;
+  string stream_key = 2;
+}
+
+// ValidateStreamKeyResponse contains the response to a validate stream key request
+message ValidateStreamKeyResponse {
+  bool valid = 1;
+}

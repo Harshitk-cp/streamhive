@@ -13,6 +13,34 @@ message SignalResponse {
   string status = 1;
 }
 
+message WebRTCConnectRequest {
+  string stream_id = 1;
+  string user_id = 2;
+  repeated string capabilities = 3;
+}
+
+message ICEServer {
+  repeated string urls = 1;
+  string username = 2;
+  string credential = 3;
+}
+
+message WebRTCConnectResponse {
+  string session_id = 1;
+  string status = 2;
+  repeated ICEServer ice_servers = 3;
+}
+
+message WebRTCDisconnectRequest {
+  string session_id = 1;
+}
+
+message WebRTCDisconnectResponse {
+  string status = 1;
+}
+
 service SignalingService {
   rpc SendSignal(SignalRequest) returns (SignalResponse);
+  rpc WebRTCConnect(WebRTCConnectRequest) returns (WebRTCConnectResponse);
+  rpc WebRTCDisconnect(WebRTCDisconnectRequest) returns (WebRTCDisconnectResponse);
 }

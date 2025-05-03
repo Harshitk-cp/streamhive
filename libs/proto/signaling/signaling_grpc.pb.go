@@ -19,7 +19,9 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	SignalingService_SendSignal_FullMethodName = "/signaling.SignalingService/SendSignal"
+	SignalingService_SendSignal_FullMethodName       = "/signaling.SignalingService/SendSignal"
+	SignalingService_WebRTCConnect_FullMethodName    = "/signaling.SignalingService/WebRTCConnect"
+	SignalingService_WebRTCDisconnect_FullMethodName = "/signaling.SignalingService/WebRTCDisconnect"
 )
 
 // SignalingServiceClient is the client API for SignalingService service.
@@ -27,6 +29,8 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type SignalingServiceClient interface {
 	SendSignal(ctx context.Context, in *SignalRequest, opts ...grpc.CallOption) (*SignalResponse, error)
+	WebRTCConnect(ctx context.Context, in *WebRTCConnectRequest, opts ...grpc.CallOption) (*WebRTCConnectResponse, error)
+	WebRTCDisconnect(ctx context.Context, in *WebRTCDisconnectRequest, opts ...grpc.CallOption) (*WebRTCDisconnectResponse, error)
 }
 
 type signalingServiceClient struct {
@@ -47,11 +51,33 @@ func (c *signalingServiceClient) SendSignal(ctx context.Context, in *SignalReque
 	return out, nil
 }
 
+func (c *signalingServiceClient) WebRTCConnect(ctx context.Context, in *WebRTCConnectRequest, opts ...grpc.CallOption) (*WebRTCConnectResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WebRTCConnectResponse)
+	err := c.cc.Invoke(ctx, SignalingService_WebRTCConnect_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *signalingServiceClient) WebRTCDisconnect(ctx context.Context, in *WebRTCDisconnectRequest, opts ...grpc.CallOption) (*WebRTCDisconnectResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WebRTCDisconnectResponse)
+	err := c.cc.Invoke(ctx, SignalingService_WebRTCDisconnect_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // SignalingServiceServer is the server API for SignalingService service.
 // All implementations must embed UnimplementedSignalingServiceServer
 // for forward compatibility.
 type SignalingServiceServer interface {
 	SendSignal(context.Context, *SignalRequest) (*SignalResponse, error)
+	WebRTCConnect(context.Context, *WebRTCConnectRequest) (*WebRTCConnectResponse, error)
+	WebRTCDisconnect(context.Context, *WebRTCDisconnectRequest) (*WebRTCDisconnectResponse, error)
 	mustEmbedUnimplementedSignalingServiceServer()
 }
 
@@ -64,6 +90,12 @@ type UnimplementedSignalingServiceServer struct{}
 
 func (UnimplementedSignalingServiceServer) SendSignal(context.Context, *SignalRequest) (*SignalResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SendSignal not implemented")
+}
+func (UnimplementedSignalingServiceServer) WebRTCConnect(context.Context, *WebRTCConnectRequest) (*WebRTCConnectResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method WebRTCConnect not implemented")
+}
+func (UnimplementedSignalingServiceServer) WebRTCDisconnect(context.Context, *WebRTCDisconnectRequest) (*WebRTCDisconnectResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method WebRTCDisconnect not implemented")
 }
 func (UnimplementedSignalingServiceServer) mustEmbedUnimplementedSignalingServiceServer() {}
 func (UnimplementedSignalingServiceServer) testEmbeddedByValue()                          {}
@@ -104,6 +136,42 @@ func _SignalingService_SendSignal_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SignalingService_WebRTCConnect_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(WebRTCConnectRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SignalingServiceServer).WebRTCConnect(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SignalingService_WebRTCConnect_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SignalingServiceServer).WebRTCConnect(ctx, req.(*WebRTCConnectRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SignalingService_WebRTCDisconnect_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(WebRTCDisconnectRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SignalingServiceServer).WebRTCDisconnect(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SignalingService_WebRTCDisconnect_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SignalingServiceServer).WebRTCDisconnect(ctx, req.(*WebRTCDisconnectRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // SignalingService_ServiceDesc is the grpc.ServiceDesc for SignalingService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -114,6 +182,14 @@ var SignalingService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SendSignal",
 			Handler:    _SignalingService_SendSignal_Handler,
+		},
+		{
+			MethodName: "WebRTCConnect",
+			Handler:    _SignalingService_WebRTCConnect_Handler,
+		},
+		{
+			MethodName: "WebRTCDisconnect",
+			Handler:    _SignalingService_WebRTCDisconnect_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
