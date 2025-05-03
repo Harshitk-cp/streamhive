@@ -1,0 +1,161 @@
+# API Gateway Configuration
+
+environment: development
+
+http:
+  address: ":8080"
+  readTimeout: 10s
+  writeTimeout: 10s
+  idleTimeout: 120s
+  tls:
+    enabled: false
+    certFile: ""
+    keyFile: ""
+
+grpc:
+  address: ":50051"
+  keepAliveTime: 30s
+  keepAliveTimeout: 10s
+  maxConnectionAge: 30m
+  tls:
+    enabled: false
+    certFile: ""
+    keyFile: ""
+
+websocket:
+  address: ":8082"
+  readTimeout: 60s
+  writeTimeout: 10s
+  idleTimeout: 300s
+  tls:
+    enabled: false
+    certFile: ""
+    keyFile: ""
+
+auth:
+  jwtSecret: "your-secret-key-change-in-production"  # Change for production
+  jwtExpiration: 24h
+  enableApiKeys: true
+  apiKeyHeaderName: "X-API-Key"
+
+rateLimit:
+  enabled: true
+  requestsPerMin: 60
+  burstSize: 10
+  expirationTime: 1h
+
+services:
+  discovery: "static"  # Options: static, consul, etcd
+  consulAddress: ""
+  etcdEndpoints: []
+  refreshInterval: 30s
+  services:
+    rtmp-ingestor:
+      name: "rtmp-ingestor"
+      httpEndpoints:
+        - "http://rtmp-ingestor:8081"
+      grpcEndpoints:
+        - "rtmp-ingestor:9090"
+      healthCheck: "/health"
+      timeout: 5s
+      retryAttempts: 3
+      retryDelay: 1s
+
+    webrtc-out:
+      name: "webrtc-out"
+      httpEndpoints:
+        - "http://webrtc-out:8080"
+      grpcEndpoints:
+        - "webrtc-out:50051"
+      healthCheck: "/health"
+      timeout: 5s
+      retryAttempts: 3
+      retryDelay: 1s
+
+    websocket-signaling:
+      name: "websocket-signaling"
+      httpEndpoints:
+        - "http://websocket-signaling:8080"
+      grpcEndpoints:
+        - "websocket-signaling:50051"
+      healthCheck: "/health"
+      timeout: 5s
+      retryAttempts: 3
+      retryDelay: 1s
+
+    enhancement-service:
+      name: "enhancement-service"
+      httpEndpoints:
+        - "http://enhancement-service:8080"
+      grpcEndpoints:
+        - "enhancement-service:50051"
+      healthCheck: "/health"
+      timeout: 10s
+      retryAttempts: 3
+      retryDelay: 1s
+
+    encoder-service:
+      name: "encoder-service"
+      httpEndpoints:
+        - "http://encoder-service:8080"
+      grpcEndpoints:
+        - "encoder-service:50051"
+      healthCheck: "/health"
+      timeout: 5s
+      retryAttempts: 3
+      retryDelay: 1s
+
+    stream-router:
+      name: "stream-router"
+      httpEndpoints:
+        - "http://stream-router:8081"
+      grpcEndpoints:
+        - "stream-router:9090"
+      healthCheck: "/health"
+      timeout: 5s
+      retryAttempts: 3
+      retryDelay: 1s
+
+    webhook-service:
+      name: "webhook-service"
+      httpEndpoints:
+        - "http://webhook-service:8080"
+      grpcEndpoints:
+        - "webhook-service:50051"
+      healthCheck: "/health"
+      timeout: 5s
+      retryAttempts: 3
+      retryDelay: 1s
+
+    stream-health-service:
+      name: "stream-health-service"
+      httpEndpoints:
+        - "http://stream-health-service:8080"
+      grpcEndpoints:
+        - "stream-health-service:50051"
+      healthCheck: "/health"
+      timeout: 5s
+      retryAttempts: 3
+      retryDelay: 1s
+
+    hls-packager:
+      name: "hls-packager"
+      httpEndpoints:
+        - "http://hls-packager:8080"
+      grpcEndpoints:
+        - "hls-packager:50051"
+      healthCheck: "/health"
+      timeout: 5s
+      retryAttempts: 3
+      retryDelay: 1s
+
+logging:
+  level: "info"  # Options: debug, info, warn, error
+  format: "json"  # Options: json, text
+  output: "stdout"  # Options: stdout, file
+  filePath: ""
+
+tracing:
+  enabled: false
+  endpoint: ""
+  serviceName: "api-gateway"

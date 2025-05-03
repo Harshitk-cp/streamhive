@@ -1,0 +1,68 @@
+# RTMP Ingestor Service Configuration
+
+# Service information
+service:
+  name: rtmp-ingestor
+  version: 0.1.0
+  description: "RTMP Ingestor Service for handling RTMP streams"
+  environment: development
+  node_id: ""  # Will be auto-generated if empty
+
+# HTTP server configuration for metrics and health checks
+http:
+  address: :8081
+  read_timeout: 10s
+  write_timeout: 10s
+  shutdown_timeout: 5s
+
+# RTMP server configuration
+rtmp:
+  address: :1935
+  chunk_size: 4096
+  buffer_size: 4194304  # 4MB
+  read_timeout: 30s
+  write_timeout: 30s
+  gop_cache_enabled: true
+  gop_cache_max_items: 1024
+  key_frame_only: false
+
+# Stream Router service configuration
+router:
+  address: stream-router:9090
+  timeout: 5s
+  max_retries: 3
+  retry_backoff: 1s
+
+# Frame Splitter service configuration
+frame_splitter:
+  address: localhost:9091
+  batch_size: 10
+  max_queue_size: 1000
+  timeout: 5s
+
+# Logging configuration
+logging:
+  level: info
+  format: json
+  output: stdout
+
+# Tracing configuration
+tracing:
+  enabled: false
+  endpoint: http://jaeger:14268/api/traces
+  service_tag: rtmp-ingestor
+  sample_rate: 0.1
+
+# Metrics configuration
+metrics:
+  enabled: true
+  address: :8081
+  path: /metrics
+  collect_period: 15s
+
+# Local storage configuration for backup frames
+storage:
+  enabled: true
+  path: ./data
+  max_size_gb: 10
+  retention_hours: 24

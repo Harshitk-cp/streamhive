@@ -1,0 +1,64 @@
+# Stream Router Service Configuration
+
+# Service information
+service:
+  name: stream-router
+  version: 0.1.0
+  description: "Stream Router Service for handling stream metadata and routing"
+  environment: development
+
+# HTTP server configuration
+http:
+  address: :8081
+  read_timeout: 10s
+  write_timeout: 10s
+  shutdown_timeout: 5s
+  cors_allow_origin: "*"
+  api_prefix: /api/v1
+
+# gRPC server configuration
+grpc:
+  address: :9090
+
+# Logging configuration
+logging:
+  level: info
+  format: json
+  output: stdout
+
+# Tracing configuration
+tracing:
+  enabled: false
+  endpoint: http://jaeger:14268/api/traces
+  service_tag: stream-router
+  sample_rate: 0.1
+
+# Database configuration
+database:
+  type: memory  # memory, postgres
+  host: postgres
+  port: 5432
+  username: postgres
+  password: postgres
+  database: streamhive
+  ssl_mode: disable
+  max_conns: 10
+
+# Redis configuration for caching
+redis:
+  enabled: false
+  address: redis:6379
+  password: ""
+  db: 0
+
+# Webhook configuration
+webhook:
+  max_retries: 3
+  retry_backoff: 5s
+  timeout: 10s
+
+# Service discovery
+discovery:
+  enabled: false
+  provider: consul
+  address: consul:8500
