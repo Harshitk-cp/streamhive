@@ -230,8 +230,8 @@ func (s *StreamService) StartStream(ctx context.Context, userID string, req mode
 	inputID := util.GenerateID()
 	backupID := util.GenerateID()
 
-	primaryURL := fmt.Sprintf("rtmp://ingest.streamhive.io/live/%s?key=%s", stream.ID, stream.Key)
-	backupURL := fmt.Sprintf("rtmp://backup.streamhive.io/live/%s?key=%s", stream.ID, stream.Key)
+	primaryURL := fmt.Sprintf("rtmp://rtmp-ingestor:1935/live/%s?key=%s", stream.ID, stream.Key)
+	backupURL := fmt.Sprintf("rtmp://rtmp-ingestor:1935/live/%s?key=%s&backup=1", stream.ID, stream.Key)
 
 	// Create primary input
 	primaryInput := model.StreamInput{
