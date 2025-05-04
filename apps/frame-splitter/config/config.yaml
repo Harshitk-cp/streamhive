@@ -1,0 +1,89 @@
+# apps/frame-splitter/config/config.yaml
+# Frame Splitter Configuration
+
+# Service information
+service:
+  name: frame-splitter
+  version: "0.1.0"
+  description: "Frame splitter for StreamHive"
+  environment: development
+
+# HTTP server configuration
+http:
+  address: ":8084"
+  read_timeout: 10s
+  write_timeout: 10s
+  shutdown_timeout: 5s
+
+# gRPC server configuration
+grpc:
+  address: ":9091"
+  max_concurrent_streams: 1000
+  connection_timeout: 10s
+  keep_alive_time: 30s
+  keep_alive_timeout: 10s
+
+# Stream router configuration
+router:
+  address: "router-service:9090"
+  timeout: 5s
+  max_retries: 3
+  retry_backoff: 1s
+
+# Frame processing configuration
+frame_processing:
+  batch_size: 30
+  max_queue_size: 10000
+  drop_frames_when_full: true
+  processing_threads: 8
+  max_batch_interval_ms: 100
+
+# Backup configuration
+backup:
+  enabled: true
+  storage_path: "/data/frames"
+  retention_minutes: 1440  # 24 hours
+  compression_enabled: true
+  compression_level: 6
+
+# Routing configuration
+routing:
+  enhancement_service:
+    address: "enhancement-service:9092"
+    enabled: true
+    filter: "frame.type == VIDEO && frame.is_key_frame == true"
+    batch_size: 1
+    priority: 1
+
+  encoder_service:
+    address: "encoder-service:9093"
+    enabled: true
+    filter: "frame.type == AUDIO"
+    batch_size: 30
+    priority: 2
+
+  webrtc_out:
+    address: "webrtc-service:9094"
+    enabled: true
+    filter: "frame.type == VIDEO"
+    batch_size: 1
+    priority: 3
+
+# Monitoring configuration
+monitoring:
+  metrics_enabled: true
+  metrics_path: "/metrics"
+  tracing_enabled: true
+  tracing_service: "frame-splitter"
+  health_check_interval: 15s
+
+# Logging configuration
+logging:
+  level: info
+  format: json
+  output: stdout
+  file_path: /var/log/frame-splitter.log
+  max_size_mb: 100
+  max_backups: 3
+  max_age_days: 7
+  compress: true

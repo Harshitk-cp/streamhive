@@ -44,3 +44,26 @@ services:
       - ROUTER_ADDRESS=stream-router:9090
     depends_on:
       - stream-router
+
+  frame-splitter:
+    build:
+      context: .
+      dockerfile: apps/frame-splitter/Dockerfile
+    ports:
+      - "8084:8084"  # HTTP port
+      - "9091:9091"  # gRPC port
+    volumes:
+      - ./apps/frame-splitter/config:/app/config
+      - frame-data:/data/frames
+    environment:
+      - HTTP_ADDRESS=:8084
+      - GRPC_ADDRESS=:9091
+      - ROUTER_ADDRESS=stream-router:9090
+      - ENHANCEMENT_SERVICE_ADDRESS=enhancement-service:9092
+      - ENCODER_SERVICE_ADDRESS=encoder-service:9093
+      - WEBRTC_SERVICE_ADDRESS=webrtc-service:9094
+    depends_on:
+      - stream-router
+
+volumes:
+  frame-data:

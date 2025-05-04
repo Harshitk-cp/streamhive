@@ -1,0 +1,75 @@
+syntax = "proto3";
+
+package webrtc;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+option go_package = "libs/proto/webrtc";
+
+// Frame type enumeration
+enum FrameType {
+  UNKNOWN = 0;
+  VIDEO = 1;
+  AUDIO = 2;
+  METADATA = 3;
+}
+
+// Frame represents a video or audio frame
+message Frame {
+  string stream_id = 1;
+  string frame_id = 2;
+  google.protobuf.Timestamp timestamp = 3;
+  FrameType type = 4;
+  bytes data = 5;
+  map<string, string> metadata = 6;
+  int64 sequence = 7;
+  bool is_key_frame = 8;
+  int32 duration = 9; // Duration in milliseconds
+}
+
+// SendFramesRequest is used to send frames to WebRTC
+message SendFramesRequest {
+  string stream_id = 1;
+  repeated Frame frames = 2;
+}
+
+// SendFramesResponse contains the result of sending frames
+message SendFramesResponse {
+  string status = 1;
+  string error = 2;
+}
+
+// ICEServer represents an ICE server configuration
+message ICEServer {
+  string url = 1;
+  string username = 2;
+  string credential = 3;
+}
+
+// WebRTCConfig represents the configuration for WebRTC
+message WebRTCConfig {
+  string stream_id = 1;
+  repeated ICEServer ice_servers = 2;
+  bool trickle_ice = 3;
+  int32 max_bitrate = 4;
+  int32 max_framerate = 5;
+  map<string, string> additional_params = 6;
+}
+
+// GetWebRTCConfigRequest is used to get the WebRTC configuration for a stream
+message GetWebRTCConfigRequest {
+  string stream_id = 1;
+}
+
+// WebRTCService handles WebRTC streaming
+service WebRTCService {
+  // Send frames to WebRTC
+  rpc SendFrames(SendFramesRequest) returns (SendFramesResponse);
+
+  // Get the WebRTC configuration for a stream
+  rpc GetWebRTCConfig(GetWebRTCConfigRequest) returns (WebRTCConfig);
+
+  // Update the WebRTC configuration for a stream
+  rpc UpdateWebRTCConfig(WebRTCConfig) returns (google.protobuf.Empty);
+}
