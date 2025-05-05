@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/Harshitk-cp/streamhive/apps/stream-router/internal/config"
 	streamErrors "github.com/Harshitk-cp/streamhive/apps/stream-router/internal/errors"
 	"github.com/Harshitk-cp/streamhive/apps/stream-router/internal/model"
 	"github.com/Harshitk-cp/streamhive/apps/stream-router/internal/service"
 	routerpb "github.com/Harshitk-cp/streamhive/libs/proto/stream"
+	"github.com/golang-jwt/jwt/v4"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -796,19 +798,63 @@ func (h *GRPCHandler) ValidateStreamKey(ctx context.Context, req *routerpb.Valid
 
 // getUserIDFromContext extracts the user ID from the context
 func getUserIDFromContext(ctx context.Context) (string, error) {
-	// In a real implementation, this would extract user ID from authentication token
-	// For simplicity, we'll use metadata
+	// Extract user ID from authentication token in metadata
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
 		return "", errors.New("no metadata in context")
 	}
 
-	userIDs := md.Get("x-user-id")
-	if len(userIDs) == 0 {
-		return "", errors.New("no user ID in metadata")
+	authHeaders := md.Get("authorization")
+	if len(authHeaders) == 0 {
+		return "", errors.New("no authorization token in metadata")
 	}
 
-	return userIDs[0], nil
+	// Parse the token (assuming a Bearer token format)
+	token := authHeaders[0]
+	if len(token) < 7 || token[:7] != "Bearer " {
+		return "", errors.New("invalid authorization token format")
+	}
+	token = token[7:]
+
+	// In a real implementation, use a library like jwt-go to parse and validate the token
+	claims, err := validateAndParseToken(token, config.AuthConfig{})
+	if err != nil {
+		return "", fmt.Errorf("invalid token: %v", err)
+	}
+
+	// Extract user ID from claims
+	userID, ok := claims["user_id"].(string)
+	if !ok || userID == "" {
+		return "", errors.New("user ID not found in token claims")
+	}
+
+	return userID, nil
+}
+
+// validateAndParseToken is a placeholder for token validation logic
+func validateAndParseToken(token string, cfg config.AuthConfig) (map[string]interface{}, error) {
+	// Retrieve the secret key from the configuration
+	secretKey := []byte(cfg.JWTSecret)
+
+	// Parse the token
+	parsedToken, err := jwt.Parse(token, func(token *jwt.Token) (interface{}, error) {
+		// Ensure the signing method is what you expect
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return secretKey, nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse token: %v", err)
+	}
+
+	// Validate the token and extract claims
+	if claims, ok := parsedToken.Claims.(jwt.MapClaims); ok && parsedToken.Valid {
+		// Convert claims to a map[string]interface{}
+		return claims, nil
+	}
+
+	return nil, errors.New("invalid token")
 }
 
 // convertModelStreamToProto converts a model.Stream to routerpb.Stream

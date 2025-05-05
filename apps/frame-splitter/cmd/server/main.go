@@ -1,5 +1,3 @@
-// apps/frame-splitter/cmd/main.go
-
 package main
 
 import (
@@ -62,9 +60,12 @@ func main() {
 	log.Println("Starting frame processor")
 	go frameProcessor.Start(ctx)
 
+	// Initialize RTMP handler
+	rtmpHandler := processor.NewRTMPHandler(frameProcessor, metricsCollector)
+
 	// Initialize HTTP handler
 	log.Println("Initializing HTTP handler")
-	httpHandler := handler.NewHTTPHandler(frameProcessor, metricsCollector)
+	httpHandler := handler.NewHTTPHandler(frameProcessor, metricsCollector, rtmpHandler)
 
 	// Initialize HTTP server
 	log.Println("Initializing HTTP server")

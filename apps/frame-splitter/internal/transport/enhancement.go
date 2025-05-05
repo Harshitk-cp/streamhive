@@ -1,4 +1,3 @@
-// apps/frame-splitter/internal/transport/enhancement.go
 package transport
 
 import (

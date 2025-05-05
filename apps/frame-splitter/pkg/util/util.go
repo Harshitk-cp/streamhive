@@ -1,5 +1,3 @@
-// apps/frame-splitter/pkg/util/util.go
-
 package util
 
 import (
@@ -259,4 +257,19 @@ func RemoveOldFiles(path string, olderThan time.Time) error {
 		}
 		return nil
 	})
+}
+
+// UniqueStrings returns a slice with duplicate strings removed
+func UniqueStrings(slice []string) []string {
+	seen := make(map[string]struct{})
+	result := make([]string, 0, len(slice))
+
+	for _, str := range slice {
+		if _, exists := seen[str]; !exists {
+			seen[str] = struct{}{}
+			result = append(result, str)
+		}
+	}
+
+	return result
 }

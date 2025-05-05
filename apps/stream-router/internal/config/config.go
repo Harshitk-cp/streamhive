@@ -83,6 +83,14 @@ type Config struct {
 	} `yaml:"discovery"`
 }
 
+// AuthConfig holds authentication configuration
+type AuthConfig struct {
+	JWTSecret        string        `yaml:"jwtSecret"`
+	JWTExpiration    time.Duration `yaml:"jwtExpiration"`
+	EnableAPIKeys    bool          `yaml:"enableApiKeys"`
+	APIKeyHeaderName string        `yaml:"apiKeyHeaderName"`
+}
+
 // Load loads the configuration from a file
 func Load(path string) (*Config, error) {
 	// Read the configuration file

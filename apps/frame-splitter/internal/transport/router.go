@@ -1,5 +1,3 @@
-// apps/frame-splitter/internal/transport/router.go
-
 package transport
 
 import (

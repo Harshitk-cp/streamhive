@@ -1,4 +1,3 @@
-// apps/frame-splitter/internal/handler/grpc.go
 package handler
 
 import (

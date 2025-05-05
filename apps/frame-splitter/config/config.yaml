@@ -23,6 +23,12 @@ grpc:
   keep_alive_time: 30s
   keep_alive_timeout: 10s
 
+auth:
+  jwtSecret: "your-secret-key-change-in-production"  # Change for production
+  jwtExpiration: 24h
+  enableApiKeys: true
+  apiKeyHeaderName: "X-API-Key"
+
 # Stream router configuration
 router:
   address: "router-service:9090"

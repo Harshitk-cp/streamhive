@@ -49,10 +49,9 @@ type Config struct {
 
 	// Frame Splitter service configuration
 	FrameSplitter struct {
-		Address      string        `yaml:"address"`
-		BatchSize    int           `yaml:"batch_size"`
-		MaxQueueSize int           `yaml:"max_queue_size"`
-		Timeout      time.Duration `yaml:"timeout"`
+		Address   string        `yaml:"address"`
+		BatchSize int           `yaml:"batch_size"`
+		Timeout   time.Duration `yaml:"timeout"`
 	} `yaml:"frame_splitter"`
 
 	// Logging configuration
@@ -146,6 +145,11 @@ func applyEnvironmentOverrides(config *Config) {
 	if env := os.Getenv("ENVIRONMENT"); env != "" {
 		config.Service.Environment = env
 	}
+
+	// Override Frame Splitter configuration
+	if addr := os.Getenv("FRAME_SPLITTER_ADDRESS"); addr != "" {
+		config.FrameSplitter.Address = addr
+	}
 }
 
 // setDefaults sets default values for configuration
@@ -199,17 +203,6 @@ func setDefaults(config *Config) {
 		config.Router.RetryBackoff = 1 * time.Second
 	}
 
-	// Set default Frame Splitter configuration
-	if config.FrameSplitter.BatchSize == 0 {
-		config.FrameSplitter.BatchSize = 10
-	}
-	if config.FrameSplitter.MaxQueueSize == 0 {
-		config.FrameSplitter.MaxQueueSize = 1000
-	}
-	if config.FrameSplitter.Timeout == 0 {
-		config.FrameSplitter.Timeout = 5 * time.Second
-	}
-
 	// Set default logging level if not provided
 	if config.Logging.Level == "" {
 		config.Logging.Level = "info"
@@ -243,6 +236,17 @@ func setDefaults(config *Config) {
 	if config.Service.NodeID == "" {
 		config.Service.NodeID = fmt.Sprintf("rtmp-ingestor-%d", time.Now().UnixNano()%1000)
 	}
+
+	// Set default Frame Splitter configuration
+	if config.FrameSplitter.Address == "" {
+		config.FrameSplitter.Address = "frame-splitter:9091"
+	}
+	if config.FrameSplitter.BatchSize == 0 {
+		config.FrameSplitter.BatchSize = 10
+	}
+	if config.FrameSplitter.Timeout == 0 {
+		config.FrameSplitter.Timeout = 5 * time.Second
+	}
 }
 
 // validateConfig validates the configuration
@@ -259,12 +263,12 @@ func validateConfig(config *Config) error {
 
 	// Validate Router address
 	if config.Router.Address == "" {
-		return fmt.Errorf("Router address is required")
+		return fmt.Errorf("router address is required")
 	}
 
 	// Validate Frame Splitter address
 	if config.FrameSplitter.Address == "" {
-		return fmt.Errorf("Frame Splitter address is required")
+		return fmt.Errorf("frame Splitter address is required")
 	}
 
 	// Validate logging configuration
