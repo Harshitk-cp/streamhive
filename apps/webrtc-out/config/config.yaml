@@ -1,0 +1,77 @@
+# apps/webrtc-out/config/config.yaml
+# WebRTC Out Service Configuration
+
+# Service information
+service:
+  name: webrtc-out
+  version: "0.1.0"
+  description: "WebRTC streaming service for StreamHive"
+  environment: development
+  node_id: ""  # Will be auto-generated if empty
+
+# HTTP server configuration for metrics and health checks
+http:
+  address: ":8085"
+  read_timeout: 10s
+  write_timeout: 10s
+  shutdown_timeout: 5s
+
+# gRPC server configuration
+grpc:
+  address: ":9094"
+  max_concurrent_streams: 1000
+  connection_timeout: 10s
+  keep_alive_time: 30s
+  keep_alive_timeout: 10s
+
+# WebRTC configuration
+webrtc:
+  ice_servers:
+    - urls:
+        - "stun:stun.l.google.com:19302"
+    - urls:
+        - "turn:turn.example.com:3478"
+      username: "username"
+      credential: "password"
+  timeout_duration: 30s
+  max_buffered_frames: 120
+  video_frame_rate: 30
+  video_key_frame_interval: 60
+  audio_sample_rate: 48000
+  audio_channels: 2
+  opus_frame_duration: 20ms
+  trickle_ice: true
+  codec_preferences:
+    - "VP8"
+    - "H264"
+    - "Opus"
+  bwe_mode: "dynamic"  # dynamic or static
+  enable_dtx: true     # Discontinuous transmission
+  signaling_service: "websocket-signaling:9095"
+
+# Frame processing configuration
+frame_processing:
+  batch_size: 10
+  max_queue_size: 1000
+  drop_when_full: true
+  processing_threads: 4
+
+# Logging configuration
+logging:
+  level: info
+  format: json
+  output: stdout
+
+# Tracing configuration
+tracing:
+  enabled: false
+  endpoint: "http://jaeger:14268/api/traces"
+  service_tag: "webrtc-out"
+  sample_rate: 0.1
+
+# Metrics configuration
+metrics:
+  enabled: true
+  address: ":8085"
+  path: "/metrics"
+  collect_period: 15s

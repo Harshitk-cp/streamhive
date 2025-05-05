@@ -6,7 +6,7 @@ services:
       context: .
       dockerfile: apps/api-gateway/Dockerfile
     ports:
-      - "8080:8080"  # Keeping this the same
+      - "8080:8080"
       - "50051:50051"  # Exposing gRPC port
     environment:
       - CONFIG_PATH=/app/config/config.yaml
@@ -63,6 +63,38 @@ services:
       - ROUTER_ADDRESS=stream-router:9090
     depends_on:
       - stream-router
+
+  webrtc-out:
+    build:
+      context: .
+      dockerfile: apps/webrtc-out/Dockerfile
+    ports:
+      - "8085:8085"  # HTTP port for metrics and health checks
+      - "9094:9094"  # gRPC port
+    volumes:
+      - ./apps/webrtc-out/config:/app/config
+    environment:
+      - HTTP_ADDRESS=:8085
+      - GRPC_ADDRESS=:9094
+      - SIGNALING_SERVICE=websocket-signaling:9095
+    depends_on:
+      - websocket-signaling
+
+  websocket-signaling:
+    build:
+      context: .
+      dockerfile: apps/websocket-signaling/Dockerfile
+    ports:
+      - "8086:8086"  # HTTP port for WebSocket and metrics
+      - "9095:9095"  # gRPC port
+    volumes:
+      - ./apps/websocket-signaling/config:/app/config
+    environment:
+      - HTTP_ADDRESS=:8086
+      - GRPC_ADDRESS=:9095
+      - WEBSOCKET_ENDPOINT=/ws/stream
+      - ENABLE_CORS=true
+      - ALLOWED_ORIGINS=*
 
 volumes:
   frame-data:

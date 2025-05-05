@@ -6,7 +6,6 @@ import (
 
 	"github.com/Harshitk-cp/streamhive/apps/frame-splitter/internal/model"
 	webrtcpb "github.com/Harshitk-cp/streamhive/libs/proto/webrtc"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // WebRTCClient represents a client for the WebRTC service
@@ -30,32 +29,48 @@ func NewWebRTCClient(address string) (*WebRTCClient, error) {
 
 // Send sends a batch of frames to the WebRTC service
 func (c *WebRTCClient) Send(ctx context.Context, batch model.FrameBatch) error {
-	// Convert frames to protobuf
-	frames := make([]*webrtcpb.Frame, 0, len(batch.Frames))
+	// Process each frame individually
 	for _, frame := range batch.Frames {
-		frames = append(frames, &webrtcpb.Frame{
-			StreamId:   frame.StreamID,
-			FrameId:    frame.FrameID,
-			Timestamp:  timestamppb.New(frame.Timestamp),
-			Type:       webrtcpb.FrameType(webrtcpb.FrameType_value[string(frame.Type)]),
-			Data:       frame.Data,
-			Metadata:   frame.Metadata,
-			Sequence:   frame.Sequence,
-			IsKeyFrame: frame.IsKeyFrame,
-			Duration:   frame.Duration,
-		})
-	}
+		// Determine if it's a video or audio frame
+		if string(frame.Type) == "VIDEO" {
+			// Send video frame
+			req := &webrtcpb.AddVideoFrameRequest{
+				StreamId:   frame.StreamID,
+				FrameData:  frame.Data,
+				IsKeyFrame: frame.IsKeyFrame,
+				Timestamp:  frame.Timestamp.UnixNano() / int64(1000000), // Convert to milliseconds
+			}
 
-	// Create request
-	req := &webrtcpb.SendFramesRequest{
-		StreamId: batch.StreamID,
-		Frames:   frames,
-	}
+			// Send request
+			resp, err := c.client.AddVideoFrame(ctx, req)
+			if err != nil {
+				return fmt.Errorf("failed to send video frame to WebRTC: %w", err)
+			}
 
-	// Send request
-	_, err := c.client.SendFrames(ctx, req)
-	if err != nil {
-		return fmt.Errorf("failed to send frames to WebRTC: %w", err)
+			if !resp.Success && !resp.Dropped {
+				return fmt.Errorf("failed to send video frame to WebRTC: frame rejected")
+			}
+		} else if string(frame.Type) == "AUDIO" {
+			// Send audio frame
+			req := &webrtcpb.AddAudioFrameRequest{
+				StreamId:  frame.StreamID,
+				FrameData: frame.Data,
+				Timestamp: frame.Timestamp.UnixNano() / int64(1000000), // Convert to milliseconds
+			}
+
+			// Send request
+			resp, err := c.client.AddAudioFrame(ctx, req)
+			if err != nil {
+				return fmt.Errorf("failed to send audio frame to WebRTC: %w", err)
+			}
+
+			if !resp.Success && !resp.Dropped {
+				return fmt.Errorf("failed to send audio frame to WebRTC: frame rejected")
+			}
+		} else {
+			// Skip other frame types like METADATA
+			continue
+		}
 	}
 
 	return nil
