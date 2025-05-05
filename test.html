@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>StreamHive Viewer</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      text-align: center;
+      background: #f5f5f5;
+    }
+    video {
+      width: 80%;
+      max-width: 800px;
+      height: auto;
+      margin-top: 20px;
+      background: black;
+    }
+    input, button {
+      margin: 10px;
+      padding: 10px;
+      font-size: 16px;
+    }
+  </style>
+</head>
+<body>
+  <h1>StreamHive WebRTC Viewer</h1>
+  <input type="text" id="streamId" placeholder="Enter Stream ID" />
+  <button onclick="connectStream()">Connect</button>
+  <video id="streamVideo" autoplay playsinline controls></video>
+
+  <script>
+    const streamVideo = document.getElementById('streamVideo');
+let peerConnection = null;
+let websocket = null;
+
+// Configure with your server endpoints
+const config = {
+  wsEndpoint: 'ws://localhost:8086/ws/stream/',
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' }
+  ]
+};
+
+// Connect to a stream
+function connectStream() {
+  const streamId = document.getElementById('streamId').value;
+  if (!streamId) {
+    alert('Please enter a Stream ID');
+    return;
+  }
+
+  // Generate a random user ID if not already set
+  const userId = 'viewer-' + Math.random().toString(36).substring(2, 10);
+
+  // Close existing connections
+  if (peerConnection) {
+    peerConnection.close();
+    peerConnection = null;
+  }
+
+  if (websocket && websocket.readyState === WebSocket.OPEN) {
+    websocket.close();
+    websocket = null;
+  }
+
+  // Create WebRTC connection
+  createPeerConnection(streamId, userId);
+
+  // Connect to signaling server
+  connectSignaling(streamId, userId);
+}
+
+// Create WebRTC peer connection
+function createPeerConnection(streamId, userId) {
+  console.log(`Creating peer connection for stream: ${streamId}, user: ${userId}`);
+
+  peerConnection = new RTCPeerConnection({
+    iceServers: config.iceServers
+  });
+
+  // Set up event handlers
+  peerConnection.ontrack = (event) => {
+    console.log('Received track', event);
+    if (event.streams && event.streams[0]) {
+      streamVideo.srcObject = event.streams[0];
+    }
+  };
+
+  peerConnection.onicecandidate = (event) => {
+    if (event.candidate) {
+      console.log('Got ICE candidate:', event.candidate);
+      sendSignalingMessage('ice-candidate', {
+        candidate: event.candidate.candidate,
+        sdpMid: event.candidate.sdpMid,
+        sdpMLineIndex: event.candidate.sdpMLineIndex
+      });
+    }
+  };
+
+  peerConnection.oniceconnectionstatechange = () => {
+    console.log('ICE Connection State:', peerConnection.iceConnectionState);
+
+    if (peerConnection.iceConnectionState === 'disconnected' ||
+        peerConnection.iceConnectionState === 'failed') {
+      console.error('Connection lost, attempting to reconnect...');
+      setTimeout(() => connectStream(), 5000);
+    }
+  };
+}
+
+// Connect to signaling server
+function connectSignaling(streamId, userId) {
+  const wsUrl = `${config.wsEndpoint}${streamId}?userId=${userId}`;
+  console.log(`Connecting to WebSocket: ${wsUrl}`);
+
+  try {
+    websocket = new WebSocket(wsUrl);
+
+    websocket.onopen = () => {
+      console.log('WebSocket connected, creating offer...');
+      createOfferAndSend();
+    };
+
+    websocket.onmessage = (event) => {
+      console.log('Received message:', event.data);
+      try {
+        const message = JSON.parse(event.data);
+        handleSignalingMessage(message);
+      } catch (e) {
+        console.error('Error parsing message:', e);
+      }
+    };
+
+    websocket.onerror = (error) => {
+      console.error('WebSocket error:', error);
+      alert(`WebSocket error. Check if the signaling server is running on ${config.wsEndpoint}`);
+    };
+
+    websocket.onclose = (event) => {
+      console.log(`WebSocket closed: code=${event.code}, reason=${event.reason}`);
+    };
+  } catch (error) {
+    console.error('Failed to create WebSocket:', error);
+    alert(`Failed to connect to signaling server: ${error.message}`);
+  }
+}
+
+// Create and send SDP offer
+async function createOfferAndSend() {
+  try {
+    // Create offer
+    const offer = await peerConnection.createOffer({
+      offerToReceiveAudio: true,
+      offerToReceiveVideo: true
+    });
+
+    console.log('Created offer:', offer);
+
+    // Set local description
+    await peerConnection.setLocalDescription(offer);
+    console.log('Set local description');
+
+    // Send offer to signaling server
+    sendSignalingMessage('offer', {
+      type: offer.type,
+      sdp: offer.sdp
+    });
+  } catch (error) {
+    console.error('Failed to create offer:', error);
+    alert(`Failed to create offer: ${error.message}`);
+  }
+}
+
+// Send signaling message
+function sendSignalingMessage(type, data) {
+  if (websocket && websocket.readyState === WebSocket.OPEN) {
+    const message = {
+      type: type,
+      streamId: document.getElementById('streamId').value,
+      userId: 'viewer-' + Math.random().toString(36).substring(2, 10),
+      data: data
+    };
+
+    console.log(`Sending ${type} message:`, message);
+    websocket.send(JSON.stringify(message));
+  } else {
+    console.error('WebSocket not connected, cannot send message');
+  }
+}
+
+// Handle signaling messages
+async function handleSignalingMessage(message) {
+  try {
+    console.log('Processing message type:', message.type);
+
+    switch (message.type) {
+      case 'answer':
+        // Set remote description from answer
+        await peerConnection.setRemoteDescription(new RTCSessionDescription({
+          type: 'answer',
+          sdp: message.data.sdp
+        }));
+        console.log('Set remote description from answer');
+        break;
+
+      case 'ice-candidate':
+        // Add ICE candidate
+        if (peerConnection.currentRemoteDescription) {
+          await peerConnection.addIceCandidate(new RTCIceCandidate({
+            candidate: message.data.candidate,
+            sdpMid: message.data.sdpMid,
+            sdpMLineIndex: message.data.sdpMLineIndex
+          }));
+          console.log('Added ICE candidate');
+        } else {
+          console.log('Skipping ICE candidate - no remote description yet');
+        }
+        break;
+
+      case 'pong':
+        // Handle pong (keep-alive response)
+        console.log('Received pong');
+        break;
+
+      default:
+        console.warn('Unknown message type:', message.type);
+    }
+  } catch (error) {
+    console.error('Failed to handle signaling message:', error);
+  }
+}
+
+// Send periodic ping to keep connection alive
+setInterval(() => {
+  if (websocket && websocket.readyState === WebSocket.OPEN) {
+    sendSignalingMessage('ping', {});
+  }
+}, 30000);
+  </script>
+</body>
+</html>

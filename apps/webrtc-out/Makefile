@@ -1,0 +1,32 @@
+# apps/webrtc-out/Makefile
+.PHONY: build run test clean docker
+
+# Build variables
+BINARY_NAME=webrtc-out
+DOCKER_IMAGE=streamhive/webrtc-out
+DOCKER_TAG=latest
+
+# Build the binary
+build:
+	go build -o $(BINARY_NAME) ./cmd/server
+
+# Run the application
+run:
+	go run ./cmd/server
+
+# Run tests
+test:
+	go test -v ./...
+
+# Clean build artifacts
+clean:
+	go clean
+	rm -f $(BINARY_NAME)
+
+# Build Docker image
+docker:
+	docker build -t $(DOCKER_IMAGE):$(DOCKER_TAG) .
+
+# Push Docker image
+docker-push:
+	docker push $(DOCKER_IMAGE):$(DOCKER_TAG)
