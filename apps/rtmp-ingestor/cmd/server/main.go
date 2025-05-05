@@ -41,6 +41,10 @@ func main() {
 	}
 	defer routerClient.Close()
 
+	// Initialize stream analyzer
+	streamAnalyzer := ingest.NewStreamAnalyzer(routerClient, metricsCollector)
+	streamAnalyzer.Start()
+
 	// Convert the config struct to the expected RTMPConfig type
 	rtmpConfig := ingest.RTMPConfig{
 		Address:          cfg.RTMP.Address,
@@ -54,7 +58,15 @@ func main() {
 	}
 
 	// Initialize RTMP ingestor with the converted config
-	rtmpIngestor, err := ingest.NewRTMPIngestor(rtmpConfig, routerClient, metricsCollector)
+	frameSplitterAddr := cfg.FrameSplitter.Address
+	// Initialize RTMP ingestor with frame forwarder and stream analyzer
+	rtmpIngestor, err := ingest.NewRTMPIngestor(
+		rtmpConfig,
+		routerClient,
+		metricsCollector,
+		frameSplitterAddr,
+		streamAnalyzer,
+	)
 	if err != nil {
 		log.Fatalf("Failed to create RTMP ingestor: %v", err)
 	}
@@ -93,6 +105,8 @@ func main() {
 
 	// Stop RTMP ingestor
 	rtmpIngestor.Stop()
+
+	streamAnalyzer.Stop()
 
 	log.Println("Servers successfully shutdown")
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 	"sync"
 	"time"
 
@@ -500,19 +501,46 @@ func (p *FrameProcessor) flushBatchCache(streamID string, destination string, ba
 func (p *FrameProcessor) determineDestinations(frame model.Frame, config model.StreamConfig) []string {
 	destinations := make([]string, 0)
 
-	// Check each routing rule
-	for _, rule := range config.RoutingRules {
+	// Sort routing rules by priority
+	rules := make([]model.RoutingRule, len(config.RoutingRules))
+	copy(rules, config.RoutingRules)
+	sort.Slice(rules, func(i, j int) bool {
+		return rules[i].Priority < rules[j].Priority
+	})
+
+	// Apply routing rules
+	for _, rule := range rules {
 		if !rule.Enabled {
 			continue
 		}
 
-		// Use utility function to check if frame matches filter
+		// Match by filter
 		if util.MatchesFilter(frame, rule.Filter) {
 			destinations = append(destinations, rule.Destination)
 		}
 	}
+	// Add default destinations based on frame type
+	if len(destinations) == 0 {
+		switch frame.Type {
+		case model.FrameTypeVideo:
+			// By default, video frames go to encoder and WebRTC
+			destinations = append(destinations, "encoder", "webrtc")
 
-	return destinations
+			// Key frames also go to enhancement if no specific rule matched
+			if frame.IsKeyFrame {
+				destinations = append(destinations, "enhancement")
+			}
+		case model.FrameTypeAudio:
+			// Audio frames go to encoder by default
+			destinations = append(destinations, "encoder")
+		case model.FrameTypeMetadata:
+			// Metadata frames go to storage by default
+			destinations = append(destinations, "storage")
+		}
+	}
+
+	// Remove duplicates
+	return util.UniqueStrings(destinations)
 }
 
 // collectStats collects statistics for all streams

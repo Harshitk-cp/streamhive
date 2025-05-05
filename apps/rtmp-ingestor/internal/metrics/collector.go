@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Harshitk-cp/streamhive/apps/rtmp-ingestor/internal/router"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -31,6 +32,9 @@ type Collector interface {
 
 	// HTTPHandler returns the HTTP handler for exposing metrics
 	HTTPHandler() http.Handler
+
+	// UpdateStreamMetrics updates the stream metrics
+	UpdateStreamMetrics(streamID string, stats interface{})
 }
 
 // PrometheusCollector is a Prometheus implementation of the Collector interface
@@ -52,6 +56,30 @@ type PrometheusCollector struct {
 
 	// Error metrics
 	errorsTotal *prometheus.CounterVec
+
+	streamBitrate    *prometheus.GaugeVec
+	streamFrameRate  *prometheus.GaugeVec
+	streamResolution *prometheus.GaugeVec
+}
+
+func (c *PrometheusCollector) UpdateStreamMetrics(streamID string, stats interface{}) {
+	// Check if the stats is of type router.StreamMetrics
+	if metrics, ok := stats.(router.StreamMetrics); ok {
+		// Update bitrate
+		if metrics.IngestBitrate > 0 {
+			c.streamBitrate.WithLabelValues(streamID).Set(float64(metrics.IngestBitrate))
+		}
+
+		// Update frame rate
+		if metrics.FrameRate > 0 {
+			c.streamFrameRate.WithLabelValues(streamID).Set(metrics.FrameRate)
+		}
+
+		// Update resolution
+		if metrics.Resolution != "" {
+			c.streamResolution.WithLabelValues(streamID, metrics.Resolution).Set(1)
+		}
+	}
 }
 
 // NewPrometheusCollector creates a new PrometheusCollector
@@ -134,6 +162,30 @@ func NewPrometheusCollector() *PrometheusCollector {
 				Help: "Total number of errors",
 			},
 			[]string{"stream_id", "type"},
+		),
+
+		streamBitrate: promauto.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Name: "rtmp_stream_bitrate",
+				Help: "Current bitrate of the stream in bits per second",
+			},
+			[]string{"stream_id"},
+		),
+
+		streamFrameRate: promauto.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Name: "rtmp_stream_frame_rate",
+				Help: "Current frame rate of the stream in frames per second",
+			},
+			[]string{"stream_id"},
+		),
+
+		streamResolution: promauto.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Name: "rtmp_stream_resolution",
+				Help: "Resolution of the stream (width x height)",
+			},
+			[]string{"stream_id", "resolution"},
 		),
 	}
 }

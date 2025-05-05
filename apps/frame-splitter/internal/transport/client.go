@@ -1,4 +1,3 @@
-// apps/frame-splitter/internal/transport/client.go
 package transport
 
 import (

@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Harshitk-cp/streamhive/apps/frame-splitter/internal/model"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -30,6 +31,8 @@ type Collector interface {
 
 	// HTTP handler for metrics endpoint
 	Handler() http.Handler
+
+	UpdateStreamMetrics(streamID string, stats model.StreamStats)
 }
 
 // PrometheusCollector implements the Collector interface using Prometheus
@@ -60,9 +63,35 @@ type PrometheusCollector struct {
 	errors *prometheus.CounterVec
 }
 
+func (c *PrometheusCollector) UpdateStreamMetrics(streamID string, stats model.StreamStats) {
+	// Update frames processed counter
+	if stats.FramesProcessed > 0 {
+		// We don't have a direct counter for this, but we can approximate by incrementing
+		// based on change since last measurement if needed
+		c.framesBatchProcessed.WithLabelValues(streamID).Inc()
+	}
+
+	// Update frames dropped counter
+	if stats.FramesDropped > 0 {
+		c.framesDropped.WithLabelValues(streamID, "all", "system").Add(float64(stats.FramesDropped))
+	}
+
+	// Update bytes processed via size histogram if available
+	if stats.BytesProcessed > 0 {
+		c.frameSizeBytes.WithLabelValues(streamID, "all").Observe(float64(stats.BytesProcessed))
+	}
+
+	// Update processing time if available
+	if stats.AvgProcessingTime > 0 {
+		c.frameProcessingTime.WithLabelValues(streamID, "all").Observe(stats.AvgProcessingTime.Seconds())
+	}
+
+
+}
+
 // NewPrometheusCollector creates a new PrometheusCollector
 func NewPrometheusCollector() *PrometheusCollector {
-	return &PrometheusCollector{
+	collector := &PrometheusCollector{
 		// Frame metrics
 		framesReceived: promauto.NewCounterVec(
 			prometheus.CounterOpts{
@@ -176,6 +205,9 @@ func NewPrometheusCollector() *PrometheusCollector {
 			[]string{"stream_id", "error_type"},
 		),
 	}
+
+	return collector
+
 }
 
 // FrameReceived records a frame being received

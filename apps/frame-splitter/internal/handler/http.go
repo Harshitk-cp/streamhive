@@ -1,12 +1,14 @@
-// apps/frame-splitter/internal/handler/http.go
 package handler
 
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/Harshitk-cp/streamhive/apps/frame-splitter/internal/metrics"
 	"github.com/Harshitk-cp/streamhive/apps/frame-splitter/internal/model"
@@ -16,15 +18,21 @@ import (
 
 // HTTPHandler handles HTTP requests for the frame splitter
 type HTTPHandler struct {
-	processor *processor.FrameProcessor
-	metrics   metrics.Collector
+	processor   *processor.FrameProcessor
+	metrics     metrics.Collector
+	rtmpHandler *processor.RTMPHandler
 }
 
 // NewHTTPHandler creates a new HTTP handler
-func NewHTTPHandler(processor *processor.FrameProcessor, metrics metrics.Collector) *HTTPHandler {
+func NewHTTPHandler(
+	processor *processor.FrameProcessor,
+	metrics metrics.Collector,
+	rtmpHandler *processor.RTMPHandler,
+) *HTTPHandler {
 	return &HTTPHandler{
-		processor: processor,
-		metrics:   metrics,
+		processor:   processor,
+		metrics:     metrics,
+		rtmpHandler: rtmpHandler,
 	}
 }
 
@@ -49,6 +57,8 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleBackupList(w, r)
 	case "/api/v1/backup/delete":
 		h.handleBackupDelete(w, r)
+	case "/api/v1/rtmp/frame":
+		h.handleRTMPFrame(w, r)
 	default:
 		http.NotFound(w, r)
 	}
@@ -317,4 +327,90 @@ func (h *HTTPHandler) handleBackupDelete(w http.ResponseWriter, r *http.Request)
 	json.NewEncoder(w).Encode(map[string]string{
 		"status": "success",
 	})
+}
+
+// Update NewHTTPHandler constructor
+func (h *HTTPHandler) handleRTMPFrame(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Get parameters from URL
+	streamID := r.URL.Query().Get("stream_id")
+	frameType := r.URL.Query().Get("type")
+	frameID := r.URL.Query().Get("frame_id")
+	isKeyFrame := r.URL.Query().Get("key_frame") == "true"
+	sequenceStr := r.URL.Query().Get("sequence")
+	timestampStr := r.URL.Query().Get("timestamp")
+
+	// Validate required parameters
+	if streamID == "" || frameType == "" {
+		http.Error(w, "Missing required parameters: stream_id, type", http.StatusBadRequest)
+		return
+	}
+
+	// Parse sequence if provided
+	sequence := int64(0)
+	if sequenceStr != "" {
+		var err error
+		sequence, err = strconv.ParseInt(sequenceStr, 10, 64)
+		if err != nil {
+			http.Error(w, "Invalid sequence number", http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Parse timestamp if provided
+	timestamp := time.Now()
+	if timestampStr != "" {
+		msec, err := strconv.ParseInt(timestampStr, 10, 64)
+		if err != nil {
+			http.Error(w, "Invalid timestamp", http.StatusBadRequest)
+			return
+		}
+		timestamp = time.Unix(0, msec*int64(time.Millisecond))
+	}
+
+	// Read frame data
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		return
+	}
+
+	// Parse metadata from headers
+	metadata := make(map[string]string)
+	for name, values := range r.Header {
+		if strings.HasPrefix(name, "X-Metadata-") {
+			key := strings.TrimPrefix(name, "X-Metadata-")
+			if len(values) > 0 {
+				metadata[key] = values[0]
+			}
+		}
+	}
+
+	// Process frame based on type
+	var result error
+	switch frameType {
+	case "video":
+		result = h.rtmpHandler.HandleVideoFrame(r.Context(), streamID, frameID, data, timestamp, isKeyFrame, sequence, metadata)
+	case "audio":
+		result = h.rtmpHandler.HandleAudioFrame(r.Context(), streamID, frameID, data, timestamp, sequence, metadata)
+	case "metadata":
+		result = h.rtmpHandler.HandleMetadataFrame(r.Context(), streamID, frameID, data, timestamp, sequence)
+	default:
+		http.Error(w, "Invalid frame type", http.StatusBadRequest)
+		return
+	}
+
+	if result != nil {
+		http.Error(w, result.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Send response
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }

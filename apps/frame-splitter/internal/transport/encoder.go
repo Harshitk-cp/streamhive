@@ -1,4 +1,3 @@
-// apps/frame-splitter/internal/transport/encoder.go
 package transport
 
 import (

@@ -1,5 +1,3 @@
-// apps/frame-splitter/internal/processor/backup.go
-
 package processor
 
 import (

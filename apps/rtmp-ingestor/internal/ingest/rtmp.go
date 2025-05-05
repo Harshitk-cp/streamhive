@@ -21,6 +21,8 @@ type RTMPIngestor struct {
 	config           RTMPConfig
 	routerClient     router.Client
 	metricsCollector metrics.Collector
+	frameForwarder   *FrameForwarder
+	streamAnalyzer   *StreamAnalyzer
 	server           *rtmp.Server
 	activeStreams    map[string]*StreamInfo
 	streamsMutex     sync.RWMutex
@@ -61,15 +63,28 @@ type StreamInfo struct {
 }
 
 // NewRTMPIngestor creates a new RTMP ingestor
-func NewRTMPIngestor(config RTMPConfig, routerClient router.Client, metricsCollector metrics.Collector) (*RTMPIngestor, error) {
+func NewRTMPIngestor(
+	config RTMPConfig,
+	routerClient router.Client,
+	metricsCollector metrics.Collector,
+	frameSplitterAddr string,
+	streamAnalyzer *StreamAnalyzer,
+) (*RTMPIngestor, error) {
+	// Create frame forwarder
+	frameForwarder, err := NewFrameForwarder(frameSplitterAddr, 10) // Batch size of 10
+	if err != nil {
+		return nil, fmt.Errorf("failed to create frame forwarder: %w", err)
+	}
+
 	ingestor := &RTMPIngestor{
 		config:           config,
 		routerClient:     routerClient,
 		metricsCollector: metricsCollector,
+		frameForwarder:   frameForwarder,
+		streamAnalyzer:   streamAnalyzer,
 		activeStreams:    make(map[string]*StreamInfo),
 		shutdownCh:       make(chan struct{}),
 	}
-
 	// Create RTMP server
 	ingestor.server = &rtmp.Server{
 		Addr:          config.Address,
@@ -113,6 +128,11 @@ func (i *RTMPIngestor) Stop() {
 	// Signal all goroutines to stop
 	close(i.shutdownCh)
 
+	// Stop frame forwarder
+	if i.frameForwarder != nil {
+		i.frameForwarder.Close()
+	}
+
 	// Disconnect all clients
 	i.streamsMutex.Lock()
 	activeStreams := make(map[string]*StreamInfo)
@@ -151,6 +171,9 @@ func (i *RTMPIngestor) handlePublish(conn *rtmp.Conn) {
 	appName := pathParts[0]  // Usually "live"
 	streamID := pathParts[1] // Stream ID
 	streamKey := urlQuery.Get("key")
+
+	// Register with stream analyzer
+	i.streamAnalyzer.RegisterStream(streamID)
 
 	// Check if this is a backup stream
 	isBackup := urlQuery.Get("backup") == "1"
@@ -260,6 +283,8 @@ func (i *RTMPIngestor) handlePublish(conn *rtmp.Conn) {
 		log.Printf("Stream %s ended gracefully", streamID)
 	}
 
+	i.streamAnalyzer.UnregisterStream(streamID)
+
 	// Remove from active streams
 	i.streamsMutex.Lock()
 	delete(i.activeStreams, streamID)
@@ -304,11 +329,115 @@ func (i *RTMPIngestor) handlePacket(streamInfo *StreamInfo) func(av.Packet) erro
 			streamInfo.Mutex.Unlock()
 		}
 
-		// Here we would process the packet for further distribution:
-		// 1. Send to frame splitter service
-		// 2. Store frame for backup if needed
-		// 3. Extract thumbnails for preview
-		// 4. Calculate metrics (bitrate, fps, etc.)
+		// Determine frame type
+		frameType := "video"
+		if pkt.IsKeyFrame && strings.Contains(streamInfo.Codec, "audio") {
+			frameType = "audio"
+		}
+
+		// Extract codec-specific information
+		if frameType == "video" {
+			// For H.264, the first few bytes of the first packet might contain SPS
+			// This is a simplified approach - real implementation would need proper parsing
+			if pkt.IsKeyFrame && len(pkt.Data) > 10 {
+				// Try to extract resolution from SPS
+				width, height, err := ExtractH264Resolution(pkt.Data)
+				if err == nil && width > 0 && height > 0 {
+					streamInfo.Width = width
+					streamInfo.Height = height
+
+					// Update codec info
+					streamInfo.Codec = "h264"
+				}
+			}
+
+			// Update stream analyzer with video frame info
+			i.streamAnalyzer.ProcessVideoFrame(
+				streamInfo.StreamID,
+				pkt.IsKeyFrame,
+				streamInfo.StartTime.Add(pkt.Time),
+				len(pkt.Data),
+				streamInfo.Width,
+				streamInfo.Height,
+				streamInfo.Codec,
+			)
+		} else if frameType == "audio" {
+			// For AAC, try to extract audio parameters
+			if len(pkt.Data) > 7 {
+				sampleRate, channels, err := ExtractAACInfo(pkt.Data)
+				if err == nil {
+					// Update stream analyzer with audio frame info
+					i.streamAnalyzer.ProcessAudioFrame(
+						streamInfo.StreamID,
+						streamInfo.StartTime.Add(pkt.Time),
+						len(pkt.Data),
+						"aac",
+						sampleRate,
+						channels,
+					)
+				}
+			} else {
+				// If we can't extract specific info, still log the frame
+				i.streamAnalyzer.ProcessAudioFrame(
+					streamInfo.StreamID,
+					streamInfo.StartTime.Add(pkt.Time),
+					len(pkt.Data),
+					"unknown",
+					0,
+					0,
+				)
+			}
+		}
+
+		// Create metadata for frame
+		metadata := map[string]string{
+			"codec": streamInfo.Codec,
+		}
+		if frameType == "video" {
+			metadata["width"] = fmt.Sprintf("%d", streamInfo.Width)
+			metadata["height"] = fmt.Sprintf("%d", streamInfo.Height)
+		}
+
+		// Forward frame to Frame Splitter
+		err := i.frameForwarder.ForwardFrame(
+			streamInfo.StreamID,
+			pkt.IsKeyFrame,
+			frameType,
+			pkt.Data,
+			streamInfo.StartTime.Add(pkt.Time),
+			streamInfo.FrameCount,
+			metadata,
+		)
+		if err != nil {
+			log.Printf("Failed to forward frame: %v", err)
+			// Continue processing even if forwarding fails
+		}
+
+		// Store in GOP cache if enabled
+		if streamInfo.gopCacheEnabled {
+			streamInfo.Mutex.Lock()
+			// If this is a key frame, clear the cache to start a new GOP
+			if pkt.IsKeyFrame {
+				streamInfo.gopCache = streamInfo.gopCache[:0]
+			}
+
+			// Add packet to cache
+			if len(streamInfo.gopCache) < streamInfo.maxGopItems {
+				// Make a copy of the packet to avoid data races
+				packetCopy := av.Packet{
+					IsKeyFrame:      pkt.IsKeyFrame,
+					Idx:             pkt.Idx,
+					CompositionTime: pkt.CompositionTime,
+					Time:            pkt.Time,
+				}
+				// Copy the data
+				packetCopy.Data = make([]byte, len(pkt.Data))
+				copy(packetCopy.Data, pkt.Data)
+
+				streamInfo.gopCache = append(streamInfo.gopCache, packetCopy)
+			}
+			streamInfo.Mutex.Unlock()
+		}
 
 		return nil
 	}

@@ -1,4 +1,3 @@
-// apps/frame-splitter/internal/transport/webrtc.go
 package transport
 
 import (

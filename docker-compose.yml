@@ -34,7 +34,7 @@ services:
       context: .
       dockerfile: apps/rtmp-ingestor/Dockerfile
     ports:
-      - "8083:8081"  # Changed to avoid clash with stream-router internal port
+      - "8083:8081"  # HTTP port
       - "1935:1935"  # RTMP port
     volumes:
       - ./apps/rtmp-ingestor/config:/src/config
@@ -42,8 +42,10 @@ services:
       - HTTP_ADDRESS=:8081
       - RTMP_ADDRESS=:1935
       - ROUTER_ADDRESS=stream-router:9090
+      - FRAME_SPLITTER_ADDRESS=frame-splitter:9091
     depends_on:
       - stream-router
+      - frame-splitter
 
   frame-splitter:
     build:
@@ -53,15 +55,12 @@ services:
       - "8084:8084"  # HTTP port
       - "9091:9091"  # gRPC port
     volumes:
-      - ./apps/frame-splitter/config:/app/config
+      - ./apps/frame-splitter/config:/src/config
       - frame-data:/data/frames
     environment:
       - HTTP_ADDRESS=:8084
       - GRPC_ADDRESS=:9091
       - ROUTER_ADDRESS=stream-router:9090
-      - ENHANCEMENT_SERVICE_ADDRESS=enhancement-service:9092
-      - ENCODER_SERVICE_ADDRESS=encoder-service:9093
-      - WEBRTC_SERVICE_ADDRESS=webrtc-service:9094
     depends_on:
       - stream-router
 
