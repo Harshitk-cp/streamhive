@@ -38,17 +38,6 @@ func (s *Service) PingSignalingService(ctx context.Context) error {
 	return err
 }
 
-// GetStreamStats gets stats for a stream with error handling
-func (s *Service) GetStreamStat(ctx context.Context, streamID string) (*webrtcPb.GetStreamStatsResponse, error) {
-	// Create request
-	req := &webrtcPb.GetStreamStatsRequest{
-		StreamId: streamID,
-	}
-
-	// Get stream stats
-	return s.GetStreamStats(ctx, req)
-}
-
 // GetMaxQueueSize returns the maximum queue size for streams
 func (s *Service) GetMaxQueueSize() int {
 	return s.config.FrameProcessing.MaxQueueSize

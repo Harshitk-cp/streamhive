@@ -1,13 +1,10 @@
-# apps/webrtc-out/config/config.yaml
-# WebRTC Out Service Configuration
-
 # Service information
 service:
   name: webrtc-out
   version: "0.1.0"
   description: "WebRTC streaming service for StreamHive"
   environment: development
-  node_id: ""  # Will be auto-generated if empty
+  node_id: ""  # Will be auto-generated if empty or provided via NODE_ID env var
 
 # HTTP server configuration for metrics and health checks
 http:
@@ -30,9 +27,7 @@ webrtc:
     - urls:
         - "stun:stun.l.google.com:19302"
     - urls:
-        - "turn:turn.example.com:3478"
-      username: "username"
-      credential: "password"
+        - "stun:stun1.l.google.com:19302"
   timeout_duration: 30s
   max_buffered_frames: 120
   video_frame_rate: 30
@@ -47,7 +42,7 @@ webrtc:
     - "Opus"
   bwe_mode: "dynamic"  # dynamic or static
   enable_dtx: true     # Discontinuous transmission
-  signaling_service: "websocket-signaling:9095"
+  signaling_service: "websocket-signaling:9095"  # IMPORTANT: Must match the port in docker-compose
 
 # Frame processing configuration
 frame_processing:

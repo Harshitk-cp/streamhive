@@ -2,241 +2,1006 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>StreamHive Viewer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>StreamHive WebRTC Player</title>
   <style>
+    :root {
+      --primary: #3b82f6;
+      --primary-dark: #2563eb;
+      --success: #10b981;
+      --danger: #ef4444;
+      --warning: #f59e0b;
+      --background: #f9fafb;
+      --text: #111827;
+      --text-secondary: #6b7280;
+      --border: #d1d5db;
+      --card: #ffffff;
+    }
+
     body {
-      font-family: sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background-color: var(--background);
+      color: var(--text);
+      margin: 0;
+      padding: 0;
+      line-height: 1.5;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+
+    .header {
       text-align: center;
-      background: #f5f5f5;
+      margin-bottom: 30px;
     }
+
+    .logo {
+      font-size: 2.5rem;
+      font-weight: bold;
+      margin-bottom: 5px;
+      background: linear-gradient(90deg, #3b82f6, #10b981);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .subtitle {
+      color: var(--text-secondary);
+      font-size: 1.1rem;
+    }
+
+    .main {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 20px;
+    }
+
+    @media (min-width: 1024px) {
+      .main {
+        grid-template-columns: 3fr 1fr;
+      }
+    }
+
+    .card {
+      background-color: var(--card);
+      border-radius: 10px;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 15px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 10px;
+    }
+
+    .card-title {
+      font-size: 1.2rem;
+      font-weight: 600;
+      margin: 0;
+    }
+
+    .video-container {
+      position: relative;
+      width: 100%;
+      background-color: #000;
+      border-radius: 8px;
+      overflow: hidden;
+      aspect-ratio: 16/9;
+    }
+
     video {
-      width: 80%;
-      max-width: 800px;
-      height: auto;
-      margin-top: 20px;
-      background: black;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
     }
-    input, button {
-      margin: 10px;
+
+    .status-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      background-color: rgba(0, 0, 0, 0.7);
+      color: white;
+      font-size: 1.2rem;
+      z-index: 10;
+    }
+
+    .status-overlay.hidden {
+      display: none;
+    }
+
+    .spinner {
+      border: 4px solid rgba(255, 255, 255, 0.3);
+      border-top: 4px solid white;
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      animation: spin 1s linear infinite;
+      margin-bottom: 15px;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 15px;
+    }
+
+    .form-group {
+      flex: 1;
+      min-width: 200px;
+    }
+
+    .form-label {
+      display: block;
+      margin-bottom: 5px;
+      font-weight: 500;
+    }
+
+    .form-control {
+      width: 100%;
       padding: 10px;
-      font-size: 16px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      font-size: 1rem;
+    }
+
+    .btn {
+      padding: 10px 15px;
+      border-radius: 6px;
+      border: none;
+      font-size: 1rem;
+      font-weight: 500;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: background-color 0.2s, transform 0.1s;
+    }
+
+    .btn:hover {
+      transform: translateY(-1px);
+    }
+
+    .btn:active {
+      transform: translateY(1px);
+    }
+
+    .btn-primary {
+      background-color: var(--primary);
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background-color: var(--primary-dark);
+    }
+
+    .btn-danger {
+      background-color: var(--danger);
+      color: white;
+    }
+
+    .btn-actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 15px;
+    }
+
+    .btn-group {
+      display: flex;
+      gap: 10px;
+    }
+
+    .btn.disabled {
+      opacity: 0.7;
+      cursor: not-allowed;
+    }
+
+    .stats-container {
+      margin-top: 15px;
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .stat-item {
+      background-color: #f3f4f6;
+      border-radius: 6px;
+      padding: 10px;
+      text-align: center;
+    }
+
+    .stat-value {
+      font-size: 1.2rem;
+      font-weight: 600;
+      margin-bottom: 5px;
+    }
+
+    .stat-label {
+      font-size: 0.9rem;
+      color: var(--text-secondary);
+    }
+
+    .log-container {
+      height: 300px;
+      overflow-y: auto;
+      background-color: #1a1a1a;
+      color: #f0f0f0;
+      font-family: monospace;
+      padding: 10px;
+      border-radius: 6px;
+    }
+
+    .log-entry {
+      margin-bottom: 5px;
+      line-height: 1.4;
+      border-bottom: 1px solid #333;
+      padding-bottom: 5px;
+    }
+
+    .log-timestamp {
+      color: #a3a3a3;
+      margin-right: 8px;
+    }
+
+    .log-type-info {
+      color: #63b3ed;
+    }
+
+    .log-type-success {
+      color: #84e1bc;
+    }
+
+    .log-type-error {
+      color: #f8b4b4;
+    }
+
+    .log-type-warning {
+      color: #fbd38d;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 4px 8px;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+
+    .badge-online {
+      background-color: rgba(16, 185, 129, 0.1);
+      color: var(--success);
+    }
+
+    .badge-offline {
+      background-color: rgba(239, 68, 68, 0.1);
+      color: var(--danger);
+    }
+
+    .badge-connecting {
+      background-color: rgba(245, 158, 11, 0.1);
+      color: var(--warning);
+    }
+
+    .progress-container {
+      width: 100%;
+      height: 4px;
+      background-color: #e5e7eb;
+      border-radius: 9999px;
+      overflow: hidden;
+      margin-top: 10px;
+    }
+
+    .progress-bar {
+      height: 100%;
+      background-color: var(--primary);
+      width: 0%;
+      transition: width 0.3s ease;
     }
   </style>
 </head>
 <body>
-  <h1>StreamHive WebRTC Viewer</h1>
-  <input type="text" id="streamId" placeholder="Enter Stream ID" />
-  <button onclick="connectStream()">Connect</button>
-  <video id="streamVideo" autoplay playsinline controls></video>
+  <div class="container">
+    <div class="header">
+      <div class="logo">StreamHive</div>
+      <div class="subtitle">Real-time WebRTC Streaming Platform</div>
+    </div>
+
+    <div class="main">
+      <div class="video-section">
+        <div class="card">
+          <div class="card-header">
+            <h2 class="card-title">Live Stream</h2>
+            <span id="connectionStatus" class="badge badge-offline">Offline</span>
+          </div>
+
+          <div class="video-container">
+            <video id="videoElement" autoplay playsinline controls muted></video>
+            <div id="statusOverlay" class="status-overlay">
+              <div class="spinner"></div>
+              <div id="statusText">Not connected</div>
+            </div>
+          </div>
+
+          <div class="controls">
+            <div class="form-group">
+              <label for="streamId" class="form-label">Stream ID</label>
+              <input type="text" id="streamId" class="form-control" value="test-stream" placeholder="Enter stream ID">
+            </div>
+
+            <div class="form-group">
+              <label for="serverUrl" class="form-label">Server URL</label>
+              <input type="text" id="serverUrl" class="form-control" value="ws://localhost:8086/ws" placeholder="WebSocket URL">
+            </div>
+          </div>
+
+          <div class="btn-actions">
+            <button id="connectBtn" class="btn btn-primary">Connect</button>
+            <button id="disconnectBtn" class="btn btn-danger" disabled>Disconnect</button>
+          </div>
+
+          <div class="stats-container">
+            <h3>Stream Statistics</h3>
+            <div class="stats-grid">
+              <div class="stat-item">
+                <div id="statBitrate" class="stat-value">0 kbps</div>
+                <div class="stat-label">Bitrate</div>
+              </div>
+              <div class="stat-item">
+                <div id="statResolution" class="stat-value">0x0</div>
+                <div class="stat-label">Resolution</div>
+              </div>
+              <div class="stat-item">
+                <div id="statFramerate" class="stat-value">0 fps</div>
+                <div class="stat-label">Framerate</div>
+              </div>
+              <div class="stat-item">
+                <div id="statLatency" class="stat-value">0 ms</div>
+                <div class="stat-label">Latency</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="log-section">
+        <div class="card">
+          <div class="card-header">
+            <h2 class="card-title">Connection Log</h2>
+            <button id="clearLogBtn" class="btn">Clear</button>
+          </div>
+          <div id="logContainer" class="log-container"></div>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <script>
-    const streamVideo = document.getElementById('streamVideo');
-let peerConnection = null;
-let websocket = null;
+    // DOM Elements
+    const videoElement = document.getElementById('videoElement');
+    const streamIdInput = document.getElementById('streamId');
+    const serverUrlInput = document.getElementById('serverUrl');
+    const connectBtn = document.getElementById('connectBtn');
+    const disconnectBtn = document.getElementById('disconnectBtn');
+    const clearLogBtn = document.getElementById('clearLogBtn');
+    const logContainer = document.getElementById('logContainer');
+    const connectionStatus = document.getElementById('connectionStatus');
+    const statusOverlay = document.getElementById('statusOverlay');
+    const statusText = document.getElementById('statusText');
 
-// Configure with your server endpoints
-const config = {
-  wsEndpoint: 'ws://localhost:8086/ws/stream/',
-  iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' }
-  ]
-};
+    // Stats elements
+    const statBitrate = document.getElementById('statBitrate');
+    const statResolution = document.getElementById('statResolution');
+    const statFramerate = document.getElementById('statFramerate');
+    const statLatency = document.getElementById('statLatency');
 
-// Connect to a stream
-function connectStream() {
-  const streamId = document.getElementById('streamId').value;
-  if (!streamId) {
-    alert('Please enter a Stream ID');
-    return;
-  }
+    // WebRTC Configuration
+    const webrtcConfig = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+      ],
+      iceTransportPolicy: 'all',
+      bundlePolicy: 'max-bundle',
+      rtcpMuxPolicy: 'require',
+      sdpSemantics: 'unified-plan'
+    };
 
-  // Generate a random user ID if not already set
-  const userId = 'viewer-' + Math.random().toString(36).substring(2, 10);
+    // State variables
+    let peerConnection = null;
+    let signaling = null;
+    let clientId = 'viewer-' + Math.random().toString(36).substring(2, 9);
+    let connected = false;
+    let reconnectAttempts = 0;
+    let statsInterval = null;
+    let pingInterval = null;
+    let currentStream = null;
+    let lastIceConnectionState = null;
 
-  // Close existing connections
-  if (peerConnection) {
-    peerConnection.close();
-    peerConnection = null;
-  }
+    const MAX_RECONNECT_ATTEMPTS = 5;
+    const STATS_INTERVAL_MS = 1000;
+    const PING_INTERVAL_MS = 30000;
 
-  if (websocket && websocket.readyState === WebSocket.OPEN) {
-    websocket.close();
-    websocket = null;
-  }
+    // Set up event listeners
+    connectBtn.addEventListener('click', connect);
+    disconnectBtn.addEventListener('click', disconnect);
+    clearLogBtn.addEventListener('click', clearLog);
 
-  // Create WebRTC connection
-  createPeerConnection(streamId, userId);
+    // Initialize
+    updateConnectionStatus('offline');
+    log('StreamHive WebRTC Player initialized');
 
-  // Connect to signaling server
-  connectSignaling(streamId, userId);
-}
+    // Connect to WebRTC stream
+    async function connect() {
+      try {
+        const streamId = streamIdInput.value.trim();
+        const serverUrl = serverUrlInput.value.trim();
 
-// Create WebRTC peer connection
-function createPeerConnection(streamId, userId) {
-  console.log(`Creating peer connection for stream: ${streamId}, user: ${userId}`);
+        if (!streamId) {
+          log('Please enter a Stream ID', 'error');
+          return;
+        }
 
-  peerConnection = new RTCPeerConnection({
-    iceServers: config.iceServers
-  });
+        if (!serverUrl) {
+          log('Please enter the WebSocket server URL', 'error');
+          return;
+        }
 
-  // Set up event handlers
-  peerConnection.ontrack = (event) => {
-    console.log('Received track', event);
-    if (event.streams && event.streams[0]) {
-      streamVideo.srcObject = event.streams[0];
+        // Update UI
+        updateConnectionStatus('connecting');
+        connectBtn.disabled = true;
+        streamIdInput.disabled = true;
+        serverUrlInput.disabled = true;
+        disconnectBtn.disabled = false;
+        statusText.textContent = 'Connecting...';
+        statusOverlay.classList.remove('hidden');
+
+        log(`Connecting to stream: ${streamId}...`);
+
+        // Create WebRTC peer connection
+        createPeerConnection();
+
+        // Connect to signaling server
+        await connectSignalingServer(streamId, serverUrl);
+
+        // Start stats monitoring
+        startStatsMonitoring();
+
+      } catch (error) {
+        log(`Connection error: ${error.message}`, 'error');
+        resetConnection();
+      }
     }
-  };
 
-  peerConnection.onicecandidate = (event) => {
-    if (event.candidate) {
-      console.log('Got ICE candidate:', event.candidate);
-      sendSignalingMessage('ice-candidate', {
-        candidate: event.candidate.candidate,
-        sdpMid: event.candidate.sdpMid,
-        sdpMLineIndex: event.candidate.sdpMLineIndex
+    // Disconnect from stream
+    function disconnect() {
+      log('Disconnecting from stream...');
+
+      stopStatsMonitoring();
+
+      // Stop ping interval
+      if (pingInterval) {
+        clearInterval(pingInterval);
+        pingInterval = null;
+      }
+
+      // Close peer connection
+      if (peerConnection) {
+        peerConnection.close();
+        peerConnection = null;
+      }
+
+      // Close signaling connection
+      if (signaling && signaling.readyState === WebSocket.OPEN) {
+        signaling.close();
+        signaling = null;
+      }
+
+      // Reset video
+      if (videoElement.srcObject) {
+        const tracks = videoElement.srcObject.getTracks();
+        tracks.forEach(track => track.stop());
+        videoElement.srcObject = null;
+        currentStream = null;
+      }
+
+      // Reset UI
+      updateConnectionStatus('offline');
+      connectBtn.disabled = false;
+      disconnectBtn.disabled = true;
+      streamIdInput.disabled = false;
+      serverUrlInput.disabled = false;
+      statusText.textContent = 'Not connected';
+      statusOverlay.classList.remove('hidden');
+
+      // Reset stats
+      statBitrate.textContent = '0 kbps';
+      statResolution.textContent = '0x0';
+      statFramerate.textContent = '0 fps';
+      statLatency.textContent = '0 ms';
+
+      connected = false;
+      reconnectAttempts = 0;
+      lastIceConnectionState = null;
+
+      log('Disconnected from stream', 'info');
+    }
+
+    // Reset connection on error
+    function resetConnection() {
+      disconnect();
+      log('Connection reset due to error', 'error');
+    }
+
+    // Create WebRTC peer connection
+    function createPeerConnection() {
+      log('Creating WebRTC connection...');
+
+      if (peerConnection) {
+        peerConnection.close();
+      }
+
+      peerConnection = new RTCPeerConnection(webrtcConfig);
+
+      // Handle ICE candidate events
+      peerConnection.onicecandidate = event => {
+        if (event.candidate) {
+          log('Got ICE candidate', 'info');
+
+          const candidate = {
+            candidate: event.candidate.candidate,
+            sdpMid: event.candidate.sdpMid,
+            sdpMLineIndex: event.candidate.sdpMLineIndex
+          };
+
+          sendSignalingMessage('ice_candidate', candidate);
+        }
+      };
+
+      // Handle ICE connection state changes
+      peerConnection.oniceconnectionstatechange = () => {
+        const newState = peerConnection.iceConnectionState;
+
+        if (newState !== lastIceConnectionState) {
+          log(`ICE connection state changed to: ${newState}`);
+          lastIceConnectionState = newState;
+
+          switch (newState) {
+            case 'checking':
+              updateConnectionStatus('connecting');
+              statusText.textContent = 'Establishing connection...';
+              break;
+
+            case 'connected':
+            case 'completed':
+              if (!connected) {
+                connected = true;
+                updateConnectionStatus('online');
+                statusOverlay.classList.add('hidden');
+                log('Stream connected successfully!', 'success');
+                reconnectAttempts = 0;
+              }
+              break;
+
+            case 'disconnected':
+            case 'failed':
+            case 'closed':
+              if (connected) {
+                connected = false;
+                updateConnectionStatus('offline');
+                statusOverlay.classList.remove('hidden');
+                statusText.textContent = 'Connection lost';
+
+                log(`Connection ${newState}`, 'error');
+
+                // Try to reconnect
+                if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                  reconnectAttempts++;
+                  log(`Attempting to reconnect (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`, 'warning');
+
+                  setTimeout(() => {
+                    if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                      connect();
+                    }
+                  }, 2000);
+                } else {
+                  log('Maximum reconnection attempts reached', 'error');
+                  resetConnection();
+                }
+              }
+              break;
+          }
+        }
+      };
+
+      // Handle track events
+      peerConnection.ontrack = event => {
+        log(`Received ${event.track.kind} track`);
+
+        if (event.streams && event.streams[0]) {
+          videoElement.srcObject = event.streams[0];
+          currentStream = event.streams[0];
+
+          // Start playing when there's enough data
+          videoElement.onloadeddata = () => {
+            log('Video loaded, starting playback', 'success');
+            videoElement.play().catch(err => {
+              log(`Error playing video: ${err.message}`, 'error');
+            });
+          };
+        }
+      };
+
+      log('WebRTC connection created');
+    }
+
+    // Connect to signaling server
+    async function connectSignalingServer(streamId, serverUrl) {
+      // Add query parameters to URL
+      const wsUrl = `${serverUrl}?streamId=${streamId}&clientId=${clientId}`;
+      log(`Connecting to signaling server: ${wsUrl}`);
+
+      return new Promise((resolve, reject) => {
+        try {
+          // Create WebSocket connection
+          signaling = new WebSocket(wsUrl);
+
+          // Set timeout for connection
+          const connectionTimeout = setTimeout(() => {
+            if (signaling.readyState !== WebSocket.OPEN) {
+              reject(new Error('Connection to signaling server timed out'));
+              signaling.close();
+            }
+          }, 10000);
+
+          // Handle WebSocket events
+          signaling.onopen = () => {
+            clearTimeout(connectionTimeout);
+            log('Connected to signaling server', 'success');
+
+            // Start sending periodic pings
+            startPingInterval();
+
+            // Create and send SDP offer
+            createAndSendOffer();
+
+            resolve();
+          };
+
+          signaling.onclose = event => {
+            log(`WebSocket connection closed: ${event.code} ${event.reason || ''}`);
+
+            if (connected) {
+              connected = false;
+              updateConnectionStatus('offline');
+
+              // Try to reconnect if not a normal closure
+              if (event.code !== 1000 && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                reconnectAttempts++;
+                log(`WebSocket disconnected, attempting to reconnect (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`, 'warning');
+
+                setTimeout(() => {
+                  if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                    connect();
+                  }
+                }, 2000);
+              }
+            }
+          };
+
+          signaling.onerror = error => {
+            clearTimeout(connectionTimeout);
+            log('WebSocket error', 'error');
+            reject(error);
+          };
+
+          signaling.onmessage = event => {
+            try {
+              const message = JSON.parse(event.data);
+              log(`Received ${message.type} message`);
+              handleSignalingMessage(message);
+            } catch (error) {
+              log(`Error handling message: ${error.message}`, 'error');
+            }
+          };
+
+        } catch (error) {
+          reject(error);
+        }
       });
     }
-  };
 
-  peerConnection.oniceconnectionstatechange = () => {
-    console.log('ICE Connection State:', peerConnection.iceConnectionState);
-
-    if (peerConnection.iceConnectionState === 'disconnected' ||
-        peerConnection.iceConnectionState === 'failed') {
-      console.error('Connection lost, attempting to reconnect...');
-      setTimeout(() => connectStream(), 5000);
-    }
-  };
-}
-
-// Connect to signaling server
-function connectSignaling(streamId, userId) {
-  const wsUrl = `${config.wsEndpoint}${streamId}?userId=${userId}`;
-  console.log(`Connecting to WebSocket: ${wsUrl}`);
-
-  try {
-    websocket = new WebSocket(wsUrl);
-
-    websocket.onopen = () => {
-      console.log('WebSocket connected, creating offer...');
-      createOfferAndSend();
-    };
-
-    websocket.onmessage = (event) => {
-      console.log('Received message:', event.data);
+    // Create and send SDP offer
+    async function createAndSendOffer() {
       try {
-        const message = JSON.parse(event.data);
-        handleSignalingMessage(message);
-      } catch (e) {
-        console.error('Error parsing message:', e);
+        log('Creating SDP offer...');
+
+        // Create offer with audio and video
+        const offer = await peerConnection.createOffer({
+          offerToReceiveAudio: true,
+          offerToReceiveVideo: true
+        });
+
+        log('Setting local description...');
+        await peerConnection.setLocalDescription(offer);
+
+        // Send offer to signaling server
+        sendSignalingMessage('offer', {
+          sdp: offer.sdp
+        });
+
+      } catch (error) {
+        log(`Error creating offer: ${error.message}`, 'error');
+        throw error;
       }
-    };
-
-    websocket.onerror = (error) => {
-      console.error('WebSocket error:', error);
-      alert(`WebSocket error. Check if the signaling server is running on ${config.wsEndpoint}`);
-    };
-
-    websocket.onclose = (event) => {
-      console.log(`WebSocket closed: code=${event.code}, reason=${event.reason}`);
-    };
-  } catch (error) {
-    console.error('Failed to create WebSocket:', error);
-    alert(`Failed to connect to signaling server: ${error.message}`);
-  }
-}
-
-// Create and send SDP offer
-async function createOfferAndSend() {
-  try {
-    // Create offer
-    const offer = await peerConnection.createOffer({
-      offerToReceiveAudio: true,
-      offerToReceiveVideo: true
-    });
-
-    console.log('Created offer:', offer);
-
-    // Set local description
-    await peerConnection.setLocalDescription(offer);
-    console.log('Set local description');
-
-    // Send offer to signaling server
-    sendSignalingMessage('offer', {
-      type: offer.type,
-      sdp: offer.sdp
-    });
-  } catch (error) {
-    console.error('Failed to create offer:', error);
-    alert(`Failed to create offer: ${error.message}`);
-  }
-}
-
-// Send signaling message
-function sendSignalingMessage(type, data) {
-  if (websocket && websocket.readyState === WebSocket.OPEN) {
-    const message = {
-      type: type,
-      streamId: document.getElementById('streamId').value,
-      userId: 'viewer-' + Math.random().toString(36).substring(2, 10),
-      data: data
-    };
-
-    console.log(`Sending ${type} message:`, message);
-    websocket.send(JSON.stringify(message));
-  } else {
-    console.error('WebSocket not connected, cannot send message');
-  }
-}
-
-// Handle signaling messages
-async function handleSignalingMessage(message) {
-  try {
-    console.log('Processing message type:', message.type);
-
-    switch (message.type) {
-      case 'answer':
-        // Set remote description from answer
-        await peerConnection.setRemoteDescription(new RTCSessionDescription({
-          type: 'answer',
-          sdp: message.data.sdp
-        }));
-        console.log('Set remote description from answer');
-        break;
-
-      case 'ice-candidate':
-        // Add ICE candidate
-        if (peerConnection.currentRemoteDescription) {
-          await peerConnection.addIceCandidate(new RTCIceCandidate({
-            candidate: message.data.candidate,
-            sdpMid: message.data.sdpMid,
-            sdpMLineIndex: message.data.sdpMLineIndex
-          }));
-          console.log('Added ICE candidate');
-        } else {
-          console.log('Skipping ICE candidate - no remote description yet');
-        }
-        break;
-
-      case 'pong':
-        // Handle pong (keep-alive response)
-        console.log('Received pong');
-        break;
-
-      default:
-        console.warn('Unknown message type:', message.type);
     }
-  } catch (error) {
-    console.error('Failed to handle signaling message:', error);
-  }
-}
 
-// Send periodic ping to keep connection alive
-setInterval(() => {
-  if (websocket && websocket.readyState === WebSocket.OPEN) {
-    sendSignalingMessage('ping', {});
-  }
-}, 30000);
+    // Send message through signaling server
+    function sendSignalingMessage(type, data) {
+      if (!signaling || signaling.readyState !== WebSocket.OPEN) {
+        log('Cannot send message, signaling connection not open', 'error');
+        return;
+      }
+
+      try {
+        const streamId = streamIdInput.value.trim();
+
+        // Construct message
+        const message = {
+          type: type,
+          stream_id: streamId,
+          sender_id: clientId,
+          recipient_id: 'server',
+          payload: JSON.stringify(data)
+        };
+
+        // Send as JSON
+        signaling.send(JSON.stringify(message));
+        log(`Sent ${type} message`);
+
+      } catch (error) {
+        log(`Error sending message: ${error.message}`, 'error');
+      }
+    }
+
+    // Handle incoming signaling messages
+    async function handleSignalingMessage(message) {
+      try {
+        switch (message.type) {
+          case 'answer':
+            log('Received SDP answer');
+
+            // Parse payload
+            const payload = JSON.parse(message.payload);
+
+            // Create SDP answer
+            const answer = new RTCSessionDescription({
+              type: 'answer',
+              sdp: payload.sdp
+            });
+
+            // Set remote description
+            await peerConnection.setRemoteDescription(answer);
+            log('Remote description set');
+            break;
+
+          case 'ice_candidate':
+            log('Received ICE candidate');
+
+            // Parse payload
+            const candidateData = JSON.parse(message.payload);
+
+            // Create and add ICE candidate
+            const candidate = new RTCIceCandidate({
+              candidate: candidateData.candidate,
+              sdpMid: candidateData.sdpMid,
+              sdpMLineIndex: candidateData.sdpMLineIndex
+            });
+
+            await peerConnection.addIceCandidate(candidate);
+            log('ICE candidate added');
+            break;
+
+          case 'pong':
+            // Received pong (keep-alive response)
+            break;
+
+          case 'stream_ended':
+            log('Stream has ended', 'warning');
+            disconnect();
+            break;
+
+          case 'error':
+            log(`Received error: ${message.payload}`, 'error');
+            break;
+
+          default:
+            log(`Received unknown message type: ${message.type}`, 'warning');
+            break;
+        }
+      } catch (error) {
+        log(`Error handling message: ${error.message}`, 'error');
+      }
+    }
+
+    // Start sending periodic pings to keep connection alive
+    function startPingInterval() {
+      if (pingInterval) {
+        clearInterval(pingInterval);
+      }
+
+      pingInterval = setInterval(() => {
+        if (signaling && signaling.readyState === WebSocket.OPEN) {
+          sendSignalingMessage('ping', {
+            timestamp: Date.now()
+          });
+        }
+      }, PING_INTERVAL_MS);
+    }
+
+    // Start collecting and displaying WebRTC stats
+    function startStatsMonitoring() {
+      if (statsInterval) {
+        clearInterval(statsInterval);
+      }
+
+      statsInterval = setInterval(async () => {
+        if (!peerConnection || !connected) return;
+
+        try {
+          const stats = await peerConnection.getStats();
+          updateStats(stats);
+        } catch (error) {
+          console.error('Error getting stats:', error);
+        }
+      }, STATS_INTERVAL_MS);
+    }
+
+    // Stop stats monitoring
+    function stopStatsMonitoring() {
+      if (statsInterval) {
+        clearInterval(statsInterval);
+        statsInterval = null;
+      }
+    }
+
+    // Update stream statistics display
+    function updateStats(stats) {
+      let bitrate = 0;
+      let width = 0;
+      let height = 0;
+      let frameRate = 0;
+      let rtt = 0;
+
+      // Process all stats
+      stats.forEach(stat => {
+        if (stat.type === 'inbound-rtp' && stat.kind === 'video') {
+          // Calculate bitrate
+          if (stat.bytesReceived && stat.timestamp) {
+            if (stat._previousBytesReceived && stat._previousTimestamp) {
+              const bytesReceived = stat.bytesReceived - stat._previousBytesReceived;
+              const timeDiff = stat.timestamp - stat._previousTimestamp;
+
+              if (timeDiff > 0) {
+                bitrate = Math.floor((bytesReceived * 8) / (timeDiff / 1000));
+              }
+            }
+
+            // Store values for next calculation
+            stat._previousBytesReceived = stat.bytesReceived;
+            stat._previousTimestamp = stat.timestamp;
+          }
+
+          // Get frame rate
+          if (stat.framesPerSecond) {
+            frameRate = Math.round(stat.framesPerSecond);
+          }
+        }
+
+        // Get video dimensions
+        if (stat.type === 'track' && stat.kind === 'video') {
+          width = stat.frameWidth || 0;
+          height = stat.frameHeight || 0;
+        }
+
+        // Get RTT (round-trip time)
+        if (stat.type === 'remote-inbound-rtp') {
+          rtt = stat.roundTripTime ? Math.floor(stat.roundTripTime * 1000) : 0;
+        }
+      });
+
+      // Update UI
+      if (bitrate > 0) {
+        const kbps = Math.floor(bitrate / 1000);
+        statBitrate.textContent = `${kbps} kbps`;
+      }
+
+      if (width > 0 && height > 0) {
+        statResolution.textContent = `${width}x${height}`;
+      }
+
+      if (frameRate > 0) {
+        statFramerate.textContent = `${frameRate} fps`;
+      }
+
+      if (rtt > 0) {
+        statLatency.textContent = `${rtt} ms`;
+      }
+    }
+
+    // Update connection status UI
+    function updateConnectionStatus(status) {
+      connectionStatus.className = `badge badge-${status}`;
+
+      switch (status) {
+        case 'online':
+          connectionStatus.textContent = 'Connected';
+          break;
+        case 'offline':
+          connectionStatus.textContent = 'Disconnected';
+          break;
+        case 'connecting':
+          connectionStatus.textContent = 'Connecting';
+          break;
+      }
+    }
+
+    // Add log entry
+    function log(message, type = 'info') {
+      // Create log entry elements
+      const entry = document.createElement('div');
+      entry.className = 'log-entry';
+
+      const timestamp = document.createElement('span');
+      timestamp.className = 'log-timestamp';
+      timestamp.textContent = new Date().toLocaleTimeString();
+
+      const content = document.createElement('span');
+      content.className = `log-type-${type}`;
+      content.textContent = message;
+
+      // Add to log entry
+      entry.appendChild(timestamp);
+      entry.appendChild(content);
+
+      // Add to log container
+      logContainer.appendChild(entry);
+
+      // Scroll to bottom
+      logContainer.scrollTop = logContainer.scrollHeight;
+
+      // Log to console as well
+      console.log(`[${type}] ${message}`);
+    }
+
+    // Clear log
+    function clearLog() {
+      logContainer.innerHTML = '';
+      log('Log cleared');
+    }
   </script>
 </body>
 </html>

@@ -6,12 +6,19 @@ services:
       context: .
       dockerfile: apps/api-gateway/Dockerfile
     ports:
-      - "8080:8080"
-      - "50051:50051"  # Exposing gRPC port
+      - "8080:8080"   # HTTP API port
+      - "50051:50051" # gRPC port
+      - "8082:8082"   # WebSocket port
     environment:
       - CONFIG_PATH=/app/config/config.yaml
+      - GIN_MODE=release
     volumes:
       - ./apps/api-gateway/config:/app/config
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
     depends_on:
       - stream-router
       - rtmp-ingestor
@@ -23,13 +30,18 @@ services:
       context: .
       dockerfile: apps/stream-router/Dockerfile
     ports:
-      - "8082:8081"  # External:Internal - 8081 is what it's listening on internally
+      - "8081:8081"  # HTTP port
       - "9090:9090"  # gRPC port
     volumes:
       - ./apps/stream-router/config:/src/config
     environment:
       - HTTP_ADDRESS=:8081
       - GRPC_ADDRESS=:9090
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
     networks:
       - streamhive-network
 
@@ -72,47 +84,77 @@ services:
     networks:
       - streamhive-network
 
+  # Optional: Enhancement service for AI processing (can be enabled later)
+  # enhancement-service:
+  #   build:
+  #     context: .
+  #     dockerfile: apps/enhancement-service/Dockerfile
+  #   ports:
+  #     - "8087:8087"  # HTTP port
+  #     - "9093:9093"  # gRPC port
+  #   volumes:
+  #     - ./apps/enhancement-service/config:/app/config
+  #   environment:
+  #     - HTTP_ADDRESS=:8087
+  #     - GRPC_ADDRESS=:9093
+  #   networks:
+  #     - streamhive-network
+
   webrtc-out:
     build:
       context: .
       dockerfile: apps/webrtc-out/Dockerfile
     ports:
-      - "8005:8005"  # HTTP port
+      - "8085:8085"  # HTTP port
+      - "9094:9094"  # gRPC port
+    volumes:
+      - ./apps/webrtc-out/config:/src/config
     environment:
-      - HTTP_ADDRESS=:8005
-      - GRPC_ADDRESS=:9050
-      - SIGNALING_SERVICE_ADDRESS=websocket-signaling:9002
-      - REDIS_ADDRESS=redis:6379
+      - HTTP_ADDRESS=:8085
+      - GRPC_ADDRESS=:9094
+      - SIGNALING_SERVICE=websocket-signaling:9095
       - NODE_ID=webrtc-out-1
-      - ICE_SERVERS=[{"urls":["stun:stun.l.google.com:19302"]}]
     depends_on:
-      - redis
       - websocket-signaling
     networks:
       - streamhive-network
 
-  # WebSocket Signaling
   websocket-signaling:
     build:
       context: .
       dockerfile: apps/websocket-signaling/Dockerfile
     ports:
-      - "8006:8006"  # WebSocket port
+      - "8086:8086"  # WebSocket port
+      - "9095:9095"  # gRPC port
+    volumes:
+      - ./apps/websocket-signaling/config:/src/config
     environment:
-      - HTTP_ADDRESS=:8006
-      - GRPC_ADDRESS=:9002
-      - REDIS_ADDRESS=redis:6379
+      - HTTP_ADDRESS=:8086
+      - GRPC_ADDRESS=:9095
       - NODE_ID=websocket-signaling-1
-    depends_on:
-      - redis
     networks:
       - streamhive-network
 
-  # Redis (for service discovery, pub/sub, and caching)
-  redis:
-    image: redis:alpine
+  # Monitoring stack
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
     ports:
-      - "6379:6379"
+      - "9090:9090"
+    networks:
+      - streamhive-network
+
+  grafana:
+    image: grafana/grafana:latest
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
     networks:
       - streamhive-network
 
@@ -122,3 +164,5 @@ networks:
 
 volumes:
   frame-data:
+  prometheus-data:
+  grafana-data:

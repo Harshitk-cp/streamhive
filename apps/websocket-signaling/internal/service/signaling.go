@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -39,6 +40,8 @@ type WebRTCNode struct {
 	MemoryUsage   float32
 	Client        webrtcPb.WebRTCServiceClient
 	Conn          *grpc.ClientConn
+	// Track registration status separately from connection
+	Registered bool
 }
 
 // Stream represents a stream that clients can connect to
@@ -66,14 +69,10 @@ type Service struct {
 	webrtcPb.UnimplementedSignalingServiceServer
 }
 
-// mustEmbedUnimplementedSignalingServiceServer implements webrtc.SignalingServiceServer.
-func (s *Service) mustEmbedUnimplementedSignalingServiceServer() {
-	panic("unimplemented")
-}
-
 // New creates a new signaling service
 func New(cfg *config.Config) (*Service, error) {
 	h := hub.NewHub()
+	go h.Run()
 
 	service := &Service{
 		config:        cfg,
@@ -85,46 +84,155 @@ func New(cfg *config.Config) (*Service, error) {
 		cleanupTicker: time.NewTicker(30 * time.Second),
 	}
 
-	// Start the WebSocket hub
-	go h.Run()
-
 	// Start cleanup routine
 	go service.cleanup()
+
+	log.Printf("WebSocket signaling service initialized with node ID: %s", cfg.Service.NodeID)
+	log.Printf("Listening for gRPC connections on %s", cfg.GRPC.Address)
+	log.Printf("Listening for HTTP/WebSocket connections on %s", cfg.HTTP.Address)
 
 	return service, nil
 }
 
-// cleanup periodically checks for stale nodes and streams
-func (s *Service) cleanup() {
-	for {
-		select {
-		case <-s.cleanupTicker.C:
-			now := time.Now()
+// RegisterWebRTCNode registers a WebRTC node with the signaling service
+func (s *Service) RegisterWebRTCNode(ctx context.Context, req *webrtcPb.RegisterWebRTCNodeRequest) (*webrtcPb.RegisterWebRTCNodeResponse, error) {
+	log.Printf("Received registration request from WebRTC node: %s at %s", req.NodeId, req.Address)
 
-			// Check for stale nodes
-			s.nodesMu.Lock()
-			for id, node := range s.nodes {
-				if now.Sub(node.LastHeartbeat) > 1*time.Minute {
-					log.Printf("Removing stale WebRTC node %s", id)
-					// Close connection
-					if node.Conn != nil {
-						node.Conn.Close()
-					}
-					// Remove node
-					delete(s.nodes, id)
-				}
-			}
-			s.nodesMu.Unlock()
+	// Validate request
+	if req.NodeId == "" {
+		log.Printf("Registration failed: empty node ID")
+		return nil, status.Errorf(codes.InvalidArgument, "node ID cannot be empty")
+	}
 
-		case <-s.stopChan:
-			s.cleanupTicker.Stop()
-			return
+	if req.Address == "" {
+		log.Printf("Registration failed: empty address")
+		return nil, status.Errorf(codes.InvalidArgument, "node address cannot be empty")
+	}
+
+	// Ensure the address is in proper network format (hostname:port)
+	address := req.Address
+	if strings.HasPrefix(address, ":") {
+		log.Printf("Warning: Address %s starts with ':' which is not a valid network address. Attempting to fix...", address)
+		// This is a local port reference, not a valid network address
+		// We can't connect to this directly, so we'll use the node's ID or try to derive a hostname
+		address = fmt.Sprintf("%s%s", req.NodeId, address)
+		log.Printf("Corrected address to: %s", address)
+	}
+
+	// Create a connection to the WebRTC node with retry logic
+	log.Printf("Attempting to connect to WebRTC node at %s", address)
+
+	var conn *grpc.ClientConn
+	var client webrtcPb.WebRTCServiceClient
+	var connectionError error
+
+	// Retry connection a few times with backoff
+	maxRetries := 3
+	for retry := 0; retry < maxRetries; retry++ {
+		dialCtx, dialCancel := context.WithTimeout(ctx, 5*time.Second)
+		conn, connectionError = grpc.DialContext(
+			dialCtx,
+			address,
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+			grpc.WithBlock(),
+		)
+		dialCancel()
+
+		if connectionError == nil {
+			client = webrtcPb.NewWebRTCServiceClient(conn)
+			log.Printf("Successfully connected to WebRTC node at %s", address)
+			break
+		}
+
+		log.Printf("Connection attempt %d/%d to WebRTC node failed: %v. Retrying...",
+			retry+1, maxRetries, connectionError)
+
+		if retry < maxRetries-1 {
+			time.Sleep(time.Duration(1<<retry) * time.Second) // Exponential backoff
 		}
 	}
+
+	// If we couldn't connect after all retries, log but continue with registration
+	if connectionError != nil {
+		log.Printf("Failed to connect to WebRTC node after %d attempts: %v", maxRetries, connectionError)
+		log.Printf("Registering node anyway, will try to reconnect during heartbeats")
+	}
+
+	// Register node
+	s.nodesMu.Lock()
+	defer s.nodesMu.Unlock()
+
+	// Check if node already exists and close old connection if it does
+	if oldNode, exists := s.nodes[req.NodeId]; exists && oldNode.Conn != nil {
+		log.Printf("Node %s already registered, closing old connection", req.NodeId)
+		oldNode.Conn.Close()
+	}
+
+	node := &WebRTCNode{
+		ID:            req.NodeId,
+		Address:       address, // Store the corrected address
+		Capabilities:  req.Capabilities,
+		MaxStreams:    req.MaxStreams,
+		LastHeartbeat: time.Now(),
+		Client:        client,
+		Conn:          conn,
+		Registered:    true,
+	}
+
+	s.nodes[req.NodeId] = node
+
+	log.Printf("Successfully registered WebRTC node %s at %s", req.NodeId, address)
+
+	return &webrtcPb.RegisterWebRTCNodeResponse{
+		Success: true,
+	}, nil
+}
+
+// SendNodeHeartbeat processes a heartbeat from a WebRTC node
+func (s *Service) SendNodeHeartbeat(ctx context.Context, req *webrtcPb.NodeHeartbeatRequest) (*webrtcPb.NodeHeartbeatResponse, error) {
+	s.nodesMu.Lock()
+	defer s.nodesMu.Unlock()
+
+	node, exists := s.nodes[req.NodeId]
+	if !exists {
+		// Node doesn't exist, so create it on heartbeat
+		log.Printf("Heartbeat from unknown node: %s. Re-registering node.", req.NodeId)
+
+		// Create a new node entry since we didn't find it
+		// We don't have the address or capabilities, but we'll just use defaults
+		// The node will properly re-register on its next startup
+		node = &WebRTCNode{
+			ID:            req.NodeId,
+			Address:       req.NodeId + ":9094", // Default guess, will be corrected on proper registration
+			LastHeartbeat: time.Now(),
+			Registered:    true,
+		}
+		s.nodes[req.NodeId] = node
+	}
+
+	// Update node status
+	node.LastHeartbeat = time.Now()
+	node.ActiveStreams = req.ActiveStreams
+	node.Connections = req.ActiveConnections
+	node.CPUUsage = req.CpuUsage
+	node.MemoryUsage = req.MemoryUsage
+
+	// Debug log every 5 minutes (reduce log noise)
+	if node.LastHeartbeat.Minute()%5 == 0 && node.LastHeartbeat.Second() < 10 {
+		log.Printf("Heartbeat from node %s: %d streams, %d connections",
+			req.NodeId, req.ActiveStreams, req.ActiveConnections)
+	}
+
+	return &webrtcPb.NodeHeartbeatResponse{
+		Success:    true,
+		ServerTime: time.Now().UnixNano() / int64(time.Millisecond),
+	}, nil
 }
 
 // RegisterStream registers a stream with the signaling service
 func (s *Service) RegisterStream(ctx context.Context, req *webrtcPb.RegisterStreamRequest) (*webrtcPb.RegisterStreamResponse, error) {
+	log.Printf("Registering stream %s on node %s", req.StreamId, req.NodeId)
+
 	s.streamsMu.Lock()
 	defer s.streamsMu.Unlock()
 
@@ -134,7 +242,16 @@ func (s *Service) RegisterStream(ctx context.Context, req *webrtcPb.RegisterStre
 	s.nodesMu.RUnlock()
 
 	if !nodeExists {
-		return nil, status.Errorf(codes.NotFound, "node not found: %s", req.NodeId)
+		log.Printf("Node %s not found for stream registration. Creating node record.", req.NodeId)
+		// Auto-create the node since it's trying to register a stream
+		s.nodesMu.Lock()
+		s.nodes[req.NodeId] = &WebRTCNode{
+			ID:            req.NodeId,
+			Address:       req.NodeId + ":9094", // Default guess
+			LastHeartbeat: time.Now(),
+			Registered:    true,
+		}
+		s.nodesMu.Unlock()
 	}
 
 	// Create or update stream
@@ -207,73 +324,25 @@ func (s *Service) UnregisterStream(ctx context.Context, req *webrtcPb.Unregister
 	}, nil
 }
 
-// RegisterWebRTCNode registers a WebRTC node with the signaling service
-func (s *Service) RegisterWebRTCNode(ctx context.Context, req *webrtcPb.RegisterWebRTCNodeRequest) (*webrtcPb.RegisterWebRTCNodeResponse, error) {
-	// Connect to the WebRTC node
-	conn, err := grpc.Dial(req.Address,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)))
-	if err != nil {
-		return nil, status.Errorf(codes.Unavailable, "failed to connect to WebRTC node: %v", err)
-	}
-
-	// Create WebRTC client
-	client := webrtcPb.NewWebRTCServiceClient(conn)
-
-	// Register node
-	s.nodesMu.Lock()
-	defer s.nodesMu.Unlock()
-
-	node := &WebRTCNode{
-		ID:            req.NodeId,
-		Address:       req.Address,
-		Capabilities:  req.Capabilities,
-		MaxStreams:    req.MaxStreams,
-		LastHeartbeat: time.Now(),
-		Client:        client,
-		Conn:          conn,
-	}
-
-	s.nodes[req.NodeId] = node
-
-	log.Printf("Registered WebRTC node %s at %s", req.NodeId, req.Address)
-
-	return &webrtcPb.RegisterWebRTCNodeResponse{
-		Success: true,
-	}, nil
-}
-
-// SendNodeHeartbeat processes a heartbeat from a WebRTC node
-func (s *Service) SendNodeHeartbeat(ctx context.Context, req *webrtcPb.NodeHeartbeatRequest) (*webrtcPb.NodeHeartbeatResponse, error) {
-	s.nodesMu.Lock()
-	defer s.nodesMu.Unlock()
-
-	node, exists := s.nodes[req.NodeId]
-	if !exists {
-		return nil, status.Errorf(codes.NotFound, "node not found: %s", req.NodeId)
-	}
-
-	// Update node status
-	node.LastHeartbeat = time.Now()
-	node.ActiveStreams = req.ActiveStreams
-	node.Connections = req.ActiveConnections
-	node.CPUUsage = req.CpuUsage
-	node.MemoryUsage = req.MemoryUsage
-
-	return &webrtcPb.NodeHeartbeatResponse{
-		Success:    true,
-		ServerTime: time.Now().UnixNano() / int64(time.Millisecond),
-	}, nil
-}
-
 // ForwardSignalingMessage forwards a signaling message to a client
 func (s *Service) ForwardSignalingMessage(ctx context.Context, req *webrtcPb.SignalingForwardRequest) (*webrtcPb.SignalingForwardResponse, error) {
+	// Check if stream exists
+	s.streamsMu.RLock()
+	_, streamExists := s.streams[req.StreamId]
+	s.streamsMu.RUnlock()
+
+	if !streamExists {
+		log.Printf("Failed to forward message: stream not found: %s", req.StreamId)
+		return nil, status.Errorf(codes.NotFound, "stream not found: %s", req.StreamId)
+	}
+
 	// Check if client exists
 	s.clientsMu.RLock()
 	client, exists := s.clients[req.RecipientId]
 	s.clientsMu.RUnlock()
 
 	if !exists || !client.Connected {
+		log.Printf("Failed to forward message: client not found or not connected: %s", req.RecipientId)
 		return nil, status.Errorf(codes.NotFound, "client not found or not connected: %s", req.RecipientId)
 	}
 
@@ -289,15 +358,212 @@ func (s *Service) ForwardSignalingMessage(ctx context.Context, req *webrtcPb.Sig
 	// Convert to JSON
 	jsonMessage, err := json.Marshal(message)
 	if err != nil {
+		log.Printf("Failed to marshal message: %v", err)
 		return nil, status.Errorf(codes.Internal, "failed to marshal message: %v", err)
 	}
 
 	// Send message to client
 	client.Hub.SendToClient(client.ID, jsonMessage)
+	log.Printf("Forwarded message of type %s from %s to %s for stream %s",
+		req.MessageType, req.SenderId, req.RecipientId, req.StreamId)
 
 	return &webrtcPb.SignalingForwardResponse{
 		Success: true,
 	}, nil
+}
+
+// RegisterClient registers a client with the signaling service
+func (s *Service) RegisterClient(ctx context.Context, req *webrtcPb.RegisterClientRequest) (*webrtcPb.RegisterClientResponse, error) {
+	// Check if stream exists and is active
+	s.streamsMu.RLock()
+	stream, streamExists := s.streams[req.StreamId]
+	streamActive := streamExists && stream.Active
+	nodeID := ""
+	if streamExists {
+		nodeID = stream.NodeID
+	}
+	s.streamsMu.RUnlock()
+
+	// If stream doesn't exist in our local cache, query all WebRTC nodes
+	// to see if any of them have the stream registered
+	if !streamExists || !streamActive {
+		// Make a copy of nodes to avoid holding the lock during RPC calls
+		s.nodesMu.RLock()
+		nodesCopy := make(map[string]*WebRTCNode, len(s.nodes))
+		for k, v := range s.nodes {
+			nodesCopy[k] = v
+		}
+		s.nodesMu.RUnlock()
+
+		// Check each node for the stream
+		var foundNode *WebRTCNode
+		for _, node := range nodesCopy {
+			// Skip nodes with no client (connection failed)
+			if node.Client == nil {
+				continue
+			}
+
+			// Call the node's GetStreamStats method to check if it has the stream
+			statsCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			resp, err := node.Client.GetStreamStats(statsCtx, &webrtcPb.GetStreamStatsRequest{
+				StreamId: req.StreamId,
+			})
+			cancel()
+
+			if err == nil && resp != nil {
+				// Stream found on this node
+				foundNode = node
+				nodeID = node.ID
+				break
+			}
+		}
+
+		if foundNode != nil {
+			// Stream exists on a node, register it locally
+			s.streamsMu.Lock()
+			s.streams[req.StreamId] = &Stream{
+				ID:        req.StreamId,
+				SessionID: req.SessionId,
+				NodeID:    nodeID,
+				Active:    true,
+				Clients:   make(map[string]*Client),
+			}
+			s.streamsMu.Unlock()
+			log.Printf("Registered stream %s with node %s after discovery", req.StreamId, nodeID)
+			streamExists = true
+			streamActive = true
+		}
+	}
+
+	// If stream still doesn't exist or is not active, return an error
+	if !streamExists || !streamActive {
+		log.Printf("Failed to register client: stream not found: %s", req.StreamId)
+		return nil, status.Errorf(codes.NotFound, "stream not found: %s", req.StreamId)
+	}
+
+	// Create a new client
+	client := &Client{
+		ID:        req.ClientId,
+		StreamID:  req.StreamId,
+		SessionID: req.SessionId,
+		Connected: true,
+		Hub:       s.hub,
+	}
+
+	// Register client
+	s.clientsMu.Lock()
+	s.clients[req.ClientId] = client
+	s.clientsMu.Unlock()
+
+	// Add client to stream
+	s.streamsMu.Lock()
+	s.streams[req.StreamId].Clients[req.ClientId] = client
+	s.streamsMu.Unlock()
+
+	log.Printf("Registered client %s for stream %s on node %s", req.ClientId, req.StreamId, nodeID)
+
+	return &webrtcPb.RegisterClientResponse{
+		Success: true,
+	}, nil
+}
+
+// UnregisterClient unregisters a client from the signaling service
+func (s *Service) UnregisterClient(ctx context.Context, req *webrtcPb.UnregisterClientRequest) (*webrtcPb.UnregisterClientResponse, error) {
+	s.clientsMu.Lock()
+	defer s.clientsMu.Unlock()
+
+	client, exists := s.clients[req.ClientId]
+	if !exists {
+		return nil, status.Errorf(codes.NotFound, "client not found: %s", req.ClientId)
+	}
+
+	// Check stream ID
+	if client.StreamID != req.StreamId {
+		return nil, status.Errorf(codes.PermissionDenied, "stream ID mismatch")
+	}
+
+	// Mark client as disconnected
+	client.Connected = false
+
+	// Remove client
+	delete(s.clients, req.ClientId)
+
+	// Remove client from stream
+	s.streamsMu.Lock()
+	if stream, streamExists := s.streams[req.StreamId]; streamExists {
+		delete(stream.Clients, req.ClientId)
+	}
+	s.streamsMu.Unlock()
+
+	log.Printf("Unregistered client %s from stream %s", req.ClientId, req.StreamId)
+
+	return &webrtcPb.UnregisterClientResponse{
+		Success: true,
+	}, nil
+}
+
+// cleanup periodically checks for stale nodes and streams and attempts to reconnect to nodes
+func (s *Service) cleanup() {
+	for {
+		select {
+		case <-s.cleanupTicker.C:
+			now := time.Now()
+
+			// Check for stale nodes and attempt to reconnect to nodes with failed connections
+			s.nodesMu.Lock()
+			for id, node := range s.nodes {
+				// Check for stale nodes - inactive for over 2 minutes with no heartbeat
+				// The 2-minute timeout allows for temporary network disruptions
+				if now.Sub(node.LastHeartbeat) > 2*time.Minute && node.Registered {
+					log.Printf("Warning: Node %s has not sent a heartbeat for %v",
+						id, now.Sub(node.LastHeartbeat))
+
+					// Don't remove the node immediately, just try to reconnect
+					// Only after 5 minutes of no activity would we consider removing it
+					if now.Sub(node.LastHeartbeat) > 5*time.Minute {
+						log.Printf("Removing stale WebRTC node %s after 5 minutes of inactivity", id)
+						// Close connection
+						if node.Conn != nil {
+							node.Conn.Close()
+						}
+						// Remove node
+						delete(s.nodes, id)
+						continue
+					}
+				}
+
+				// Try to reconnect to nodes with failed connections
+				if node.Registered && node.Client == nil && node.Conn == nil {
+					log.Printf("Attempting to reconnect to WebRTC node %s at %s", id, node.Address)
+
+					// Try to connect with timeout
+					dialCtx, dialCancel := context.WithTimeout(context.Background(), 5*time.Second)
+					conn, err := grpc.DialContext(
+						dialCtx,
+						node.Address,
+						grpc.WithTransportCredentials(insecure.NewCredentials()),
+						grpc.WithBlock(),
+					)
+					dialCancel()
+
+					if err == nil {
+						log.Printf("Successfully reconnected to WebRTC node %s", id)
+						node.Conn = conn
+						node.Client = webrtcPb.NewWebRTCServiceClient(conn)
+						// Reset heartbeat time since we've confirmed it's active
+						node.LastHeartbeat = time.Now()
+					} else {
+						log.Printf("Failed to reconnect to WebRTC node %s: %v", id, err)
+					}
+				}
+			}
+			s.nodesMu.Unlock()
+
+		case <-s.stopChan:
+			s.cleanupTicker.Stop()
+			return
+		}
+	}
 }
 
 // GetNodeForStream returns the WebRTC node for a stream
