@@ -2,100 +2,147 @@ package handler
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"time"
 
 	"github.com/Harshitk-cp/streamhive/apps/websocket-signaling/internal/service"
-	"github.com/gorilla/mux"
 )
 
 // HTTPHandler handles HTTP requests
 type HTTPHandler struct {
-	signalingService *service.Service
+	signalingService *service.SignalingService
+	mux              *http.ServeMux
 }
 
 // NewHTTPHandler creates a new HTTP handler
-func NewHTTPHandler(signalingService *service.Service) *HTTPHandler {
-	return &HTTPHandler{
+func NewHTTPHandler(signalingService *service.SignalingService) http.Handler {
+	h := &HTTPHandler{
 		signalingService: signalingService,
+		mux:              http.NewServeMux(),
 	}
+
+	// Register routes
+	h.mux.HandleFunc("/health", h.healthHandler)
+	h.mux.HandleFunc("/ready", h.readyHandler)
+	h.mux.HandleFunc("/metrics", h.metricsHandler)
+	h.mux.HandleFunc("/streams", h.listStreamsHandler)
+	h.mux.HandleFunc("/streams/", h.streamHandler)
+
+	return h
 }
 
-// SetupRoutes sets up HTTP routes
-func (h *HTTPHandler) SetupRoutes(r *mux.Router) {
-	r.HandleFunc("/health", h.handleHealth).Methods("GET")
-	r.HandleFunc("/status", h.handleStatus).Methods("GET")
-	r.HandleFunc("/nodes", h.handleNodes).Methods("GET")
-	r.HandleFunc("/streams", h.handleStreams).Methods("GET")
+// ServeHTTP implements the http.Handler interface
+func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.mux.ServeHTTP(w, r)
 }
 
-// handleHealth handles health check requests
-func (h *HTTPHandler) handleHealth(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+// healthHandler handles health check requests
+func (h *HTTPHandler) healthHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	response := map[string]interface{}{
 		"status":    "ok",
-		"timestamp": time.Now().UnixNano() / int64(time.Millisecond),
-	})
-}
-
-// handleStatus handles status check requests
-func (h *HTTPHandler) handleStatus(w http.ResponseWriter, r *http.Request) {
-	// Get service status
-	nodes, streams, clients := h.signalingService.GetStatus()
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":    "ok",
-		"nodes":     len(nodes),
-		"streams":   len(streams),
-		"clients":   len(clients),
-		"timestamp": time.Now().UnixNano() / int64(time.Millisecond),
-	})
-}
-
-// handleNodes handles node listing requests
-func (h *HTTPHandler) handleNodes(w http.ResponseWriter, r *http.Request) {
-	// Get nodes
-	nodes := h.signalingService.GetNodes()
-
-	// Convert nodes to a simpler format for JSON
-	nodeList := make([]map[string]interface{}, 0, len(nodes))
-	for _, node := range nodes {
-		nodeList = append(nodeList, map[string]interface{}{
-			"id":               node.ID,
-			"address":          node.Address,
-			"capabilities":     node.Capabilities,
-			"max_streams":      node.MaxStreams,
-			"active_streams":   node.ActiveStreams,
-			"connections":      node.Connections,
-			"cpu_usage":        node.CPUUsage,
-			"memory_usage":     node.MemoryUsage,
-			"last_heartbeat":   node.LastHeartbeat.UnixNano() / int64(time.Millisecond),
-			"heartbeat_age_ms": time.Since(node.LastHeartbeat).Milliseconds(),
-		})
+		"timestamp": time.Now().Unix(),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(nodeList)
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("Error encoding health response: %v", err)
+	}
 }
 
-// handleStreams handles stream listing requests
-func (h *HTTPHandler) handleStreams(w http.ResponseWriter, r *http.Request) {
-	// Get streams
-	streams := h.signalingService.GetStreams()
+// readyHandler handles readiness check requests
+func (h *HTTPHandler) readyHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 
-	// Convert streams to a simpler format for JSON
-	streamList := make([]map[string]interface{}, 0, len(streams))
-	for _, stream := range streams {
-		streamList = append(streamList, map[string]interface{}{
-			"id":         stream.ID,
-			"session_id": stream.SessionID,
-			"node_id":    stream.NodeID,
-			"active":     stream.Active,
-			"clients":    len(stream.Clients),
-		})
+	response := map[string]interface{}{
+		"status":    "ready",
+		"timestamp": time.Now().Unix(),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(streamList)
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("Error encoding ready response: %v", err)
+	}
+}
+
+// metricsHandler handles metrics requests
+func (h *HTTPHandler) metricsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	totalClients := h.signalingService.GetTotalClientCount()
+
+	response := map[string]interface{}{
+		"total_clients": totalClients,
+		"timestamp":     time.Now().Unix(),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("Error encoding metrics response: %v", err)
+	}
+}
+
+// listStreamsHandler lists active streams
+func (h *HTTPHandler) listStreamsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// TODO: Implement stream listing
+	streams := []map[string]interface{}{}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
+		"streams": streams,
+		"count":   len(streams),
+	}); err != nil {
+		log.Printf("Error encoding streams response: %v", err)
+	}
+}
+
+// streamHandler handles stream-specific requests
+func (h *HTTPHandler) streamHandler(w http.ResponseWriter, r *http.Request) {
+	// Extract stream ID from path
+	streamID := r.URL.Path[len("/streams/"):]
+	if streamID == "" {
+		http.Error(w, "Stream ID is required", http.StatusBadRequest)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		// Get stream info
+		clientCount := h.signalingService.GetClientCount(streamID)
+
+		response := map[string]interface{}{
+			"stream_id":    streamID,
+			"client_count": clientCount,
+			"active":       clientCount > 0,
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			log.Printf("Error encoding stream response: %v", err)
+		}
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
 }

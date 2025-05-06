@@ -1,68 +1,46 @@
+# WebSocket Signaling Service Configuration
+
 # Service information
 service:
   name: websocket-signaling
-  version: "0.1.0"
-  description: "WebSocket signaling service for WebRTC connections"
+  version: 0.1.0
+  description: "WebSocket Signaling Service for WebRTC streaming"
   environment: development
-  node_id: ""  # Will be auto-generated if empty or provided via NODE_ID env var
 
-# HTTP server configuration for WebSocket connections and metrics
+# HTTP server configuration
 http:
-  address: ":8086"
+  address: :8086
   read_timeout: 10s
   write_timeout: 10s
-  idle_timeout: 60s
-  read_header_timeout: 5s
   shutdown_timeout: 5s
-  websocket_endpoint: "/ws"
-  websocket_path: "/stream/{stream_id}"
-  allowed_origins:
-    - "*"  # In production, restrict to specific origins
-  enable_cors: true
-  use_compression: true
+
+# WebSocket server configuration
+websocket:
+  address: :8087
+  path: /ws
+  read_timeout: 60s
+  write_timeout: 10s
+  ping_interval: 25s
+  pong_timeout: 60s
+  max_message_size: 1048576  # 1MB
 
 # gRPC server configuration
 grpc:
-  address: ":9095"  # IMPORTANT: Must match with webrtc-out service config
-  max_concurrent_streams: 1000
-  connection_timeout: 10s
-  keep_alive_time: 30s
-  keep_alive_timeout: 10s
+  address: :50052
+  keep_alive_time: 60s
+  keep_alive_timeout: 20s
+  max_concurrent_streams: 100
 
-# WebSocket configuration
-websocket:
-  handshake_timeout: 10s
-  write_wait: 10s
-  pong_wait: 60s
-  ping_period: 54s  # 90% of pong_wait
-  max_message_size: 1048576  # 1MB
-  buffer_size: 1024
-  enable_compression: true
-  message_buffer_size: 256
-  client_session_timeout: 5m
+# WebRTC out service
+webrtc_out:
+  address: webrtc-out:50053
 
-# Stream configuration
-stream:
-  max_clients_per_stream: 100
-  stream_timeout: 24h
-  max_streams: 1000
+# Stream router service
+router:
+  address: stream-router:9090
 
 # Logging configuration
 logging:
   level: info
   format: json
   output: stdout
-
-# Tracing configuration
-tracing:
-  enabled: false
-  endpoint: "http://jaeger:14268/api/traces"
-  service_tag: "websocket-signaling"
-  sample_rate: 0.1
-
-# Metrics configuration
-metrics:
-  enabled: true
-  address: ":8086"
-  path: "/metrics"
-  collect_period: 15s

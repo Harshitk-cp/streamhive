@@ -114,6 +114,7 @@ services:
       - GRPC_ADDRESS=:9094
       - SIGNALING_SERVICE=websocket-signaling:9095
       - NODE_ID=webrtc-out-1
+      - EXTERNAL_ADDRESS=webrtc-out:9094  # Add this line
     depends_on:
       - websocket-signaling
     networks:
@@ -135,28 +136,28 @@ services:
     networks:
       - streamhive-network
 
-  # Monitoring stack
-  prometheus:
-    image: prom/prometheus:latest
-    volumes:
-      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
-      - prometheus-data:/prometheus
-    ports:
-      - "9090:9090"
-    networks:
-      - streamhive-network
+  # # Monitoring stack
+  # prometheus:
+  #   image: prom/prometheus:latest
+  #   volumes:
+  #     - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+  #     - prometheus-data:/prometheus
+  #   ports:
+  #     - "9090:9090"
+  #   networks:
+  #     - streamhive-network
 
-  grafana:
-    image: grafana/grafana:latest
-    volumes:
-      - grafana-data:/var/lib/grafana
-      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
-    ports:
-      - "3000:3000"
-    depends_on:
-      - prometheus
-    networks:
-      - streamhive-network
+  # grafana:
+  #   image: grafana/grafana:latest
+  #   volumes:
+  #     - grafana-data:/var/lib/grafana
+  #     - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+  #   ports:
+  #     - "3000:3000"
+  #   depends_on:
+  #     - prometheus
+  #   networks:
+  #     - streamhive-network
 
 networks:
   streamhive-network:

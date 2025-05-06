@@ -1,11 +1,8 @@
-# apps/websocket-signaling/Dockerfile
+# Build stage
 FROM golang:1.23.2-alpine AS builder
 
 # Set working directory
 WORKDIR /src
-
-# Install git and other necessary build tools
-RUN apk add --no-cache git
 
 # First, set up the proto module
 WORKDIR /src/libs/proto
@@ -13,13 +10,6 @@ WORKDIR /src/libs/proto
 COPY ./libs/proto/go.mod .
 COPY ./libs/proto/go.sum .
 RUN go mod tidy && go mod download
-
-# # Set up the health module
-# WORKDIR /src/libs/health
-# # Copy the health module files
-# COPY ./libs/health/go.mod .
-# COPY ./libs/health/go.sum .
-# RUN go mod tidy && go mod download
 
 # Copy proto source files
 COPY ./libs/proto/ .
@@ -31,26 +21,43 @@ COPY ./apps/websocket-signaling/go.mod .
 COPY ./apps/websocket-signaling/go.sum .
 RUN go mod tidy && go mod download
 
-# Copy source code
+# Copy websocket-signaling source code
 COPY ./apps/websocket-signaling/ .
 
 # Build the application
-RUN go mod tidy && CGO_ENABLED=0 GOOS=linux go build -o websocket-signaling ./cmd/server/main.go
+RUN go mod tidy && CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o websocket-signaling ./cmd/server
 
 # Final stage
 FROM alpine:3.17
 
+# Install CA certificates and timezone data
+RUN apk --no-cache add ca-certificates tzdata curl
+
+# Create non-root user
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
 # Set working directory
-WORKDIR /src
+WORKDIR /app
 
-# Copy binary from builder
-COPY --from=builder /src/apps/websocket-signaling .
+# Copy binary from builder stage
+COPY --from=builder /src/apps/websocket-signaling/websocket-signaling .
 
-# Copy configuration
-COPY --from=builder /src/apps/websocket-signaling/config/config.yaml ./config/config.yaml
+# Copy configuration files
+COPY --from=builder /src/apps/websocket-signaling/config/*.yaml ./config/
+
+# Ensure proper ownership
+RUN chown -R appuser:appgroup /app
+
+# Switch to non-root user
+USER appuser
 
 # Expose ports
-EXPOSE 8086 9095
+EXPOSE 8086 8087 50052
+
+# Set environment variables
+ENV HTTP_ADDRESS=:8086
+ENV WS_ADDRESS=:8087
+ENV GRPC_ADDRESS=:50052
 
 # Command to run the application
 CMD ["./websocket-signaling", "--config", "./config/config.yaml"]

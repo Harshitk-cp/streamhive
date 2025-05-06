@@ -3,73 +3,97 @@ package handler
 import (
 	"context"
 	"log"
-	"net"
 
-	"github.com/Harshitk-cp/streamhive/apps/websocket-signaling/internal/config"
+	"github.com/Harshitk-cp/streamhive/apps/websocket-signaling/internal/model"
 	"github.com/Harshitk-cp/streamhive/apps/websocket-signaling/internal/service"
-	webrtcPb "github.com/Harshitk-cp/streamhive/libs/proto/webrtc"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/keepalive"
+	signalpb "github.com/Harshitk-cp/streamhive/libs/proto/signaling"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// GRPCServer represents the gRPC server
-type GRPCServer struct {
-	webrtcPb.UnimplementedSignalingServiceServer
-	config  *config.Config
-	service *service.Service
-	server  *grpc.Server
+// GRPCSignalingHandler handles gRPC requests for signaling
+type GRPCSignalingHandler struct {
+	signalpb.UnimplementedSignalingServiceServer
+	signalingService *service.SignalingService
 }
 
-// NewGRPCServer creates a new gRPC server
-func NewGRPCServer(cfg *config.Config, svc *service.Service) *GRPCServer {
-	// Create gRPC server with keepalive options
-	server := grpc.NewServer(
-		grpc.KeepaliveParams(keepalive.ServerParameters{
-			MaxConnectionIdle:     cfg.GRPC.KeepAliveTime,
-			MaxConnectionAge:      cfg.GRPC.ConnectionTimeout,
-			MaxConnectionAgeGrace: cfg.GRPC.KeepAliveTimeout,
-			Time:                  cfg.GRPC.KeepAliveTime,
-			Timeout:               cfg.GRPC.KeepAliveTimeout,
-		}),
-		grpc.MaxConcurrentStreams(uint32(cfg.GRPC.MaxConcurrentStreams)),
-	)
+// NewGRPCSignalingHandler creates a new gRPC handler for signaling
+func NewGRPCSignalingHandler(signalingService *service.SignalingService) *GRPCSignalingHandler {
+	return &GRPCSignalingHandler{
+		signalingService: signalingService,
+	}
+}
 
-	grpcServer := &GRPCServer{
-		config:  cfg,
-		service: svc,
-		server:  server,
+// SendSignalingMessage sends a signaling message
+func (h *GRPCSignalingHandler) SendSignalingMessage(ctx context.Context, req *signalpb.SignalingMessage) (*emptypb.Empty, error) {
+	// Convert protobuf message to internal model
+	msg := model.SignalingMessage{
+		Type:        req.Type,
+		StreamID:    req.StreamId,
+		SenderID:    req.SenderId,
+		RecipientID: req.RecipientId,
+		Payload:     []byte(req.Payload),
+		Timestamp:   req.Timestamp,
 	}
 
-	// Register services
-	webrtcPb.RegisterSignalingServiceServer(server, grpcServer)
+	// Process message
+	h.signalingService.HandleMessage(msg)
 
-	return grpcServer
+	return &emptypb.Empty{}, nil
 }
 
-// Start starts the gRPC server
-func (s *GRPCServer) Start() error {
-	// Create listener
-	lis, err := net.Listen("tcp", s.config.GRPC.Address)
-	if err != nil {
-		return err
+// GetStreamInfo gets information about a stream
+func (h *GRPCSignalingHandler) GetStreamInfo(ctx context.Context, req *signalpb.GetStreamInfoRequest) (*signalpb.StreamInfo, error) {
+	// Get client count
+	clientCount := h.signalingService.GetClientCount(req.StreamId)
+
+	// Create response
+	response := &signalpb.StreamInfo{
+		StreamId:    req.StreamId,
+		ClientCount: int32(clientCount),
+		Active:      clientCount > 0,
+		CreatedAt:   timestamppb.Now(),
 	}
 
-	// Start server
-	log.Printf("Starting gRPC server on %s", s.config.GRPC.Address)
-	return s.server.Serve(lis)
+	return response, nil
 }
 
-// Stop stops the gRPC server
-func (s *GRPCServer) Stop() {
-	s.server.GracefulStop()
+// NotifyStreamEnded notifies clients that a stream has ended
+func (h *GRPCSignalingHandler) NotifyStreamEnded(ctx context.Context, req *signalpb.NotifyStreamEndedRequest) (*emptypb.Empty, error) {
+	// Create message
+	msg := model.SignalingMessage{
+		Type:     model.MessageTypeStreamEnded,
+		StreamID: req.StreamId,
+		SenderID: "server",
+		Payload:  []byte(`{"reason":"` + req.Reason + `"}`),
+	}
+
+	// Process message
+	h.signalingService.HandleMessage(msg)
+
+	log.Printf("Notified stream ended: %s", req.StreamId)
+	return &emptypb.Empty{}, nil
 }
 
-// RegisterStream registers a stream with the signaling service
-func (s *GRPCServer) RegisterStream(ctx context.Context, req *webrtcPb.RegisterStreamRequest) (*webrtcPb.RegisterStreamResponse, error) {
-	return s.service.RegisterStream(ctx, req)
+// GetStats gets statistics about the signaling service
+func (h *GRPCSignalingHandler) GetStats(ctx context.Context, req *emptypb.Empty) (*signalpb.SignalingStats, error) {
+	// Get total client count
+	totalClients := h.signalingService.GetTotalClientCount()
+
+	// Create response
+	response := &signalpb.SignalingStats{
+		ConnectedClients: int32(totalClients),
+		Timestamp:        timestamppb.Now(),
+	}
+
+	return response, nil
 }
 
-// UnregisterStream unregisters a stream from the signaling service
-func (s *GRPCServer) UnregisterStream(ctx context.Context, req *webrtcPb.UnregisterStreamRequest) (*webrtcPb.UnregisterStreamResponse, error) {
-	return s.service.UnregisterStream(ctx, req)
+// StreamSignaling establishes a bidirectional signaling stream
+func (h *GRPCSignalingHandler) StreamSignaling(stream signalpb.SignalingService_StreamSignalingServer) error {
+	// This method would be used for services that need bidirectional communication
+	// For simplicity, we'll just return unimplemented for now
+	return status.Errorf(codes.Unimplemented, "method StreamSignaling not implemented")
 }

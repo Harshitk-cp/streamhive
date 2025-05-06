@@ -788,65 +788,67 @@
     }
 
     // Handle incoming signaling messages
-    async function handleSignalingMessage(message) {
-      try {
-        switch (message.type) {
-          case 'answer':
-            log('Received SDP answer');
 
-            // Parse payload
-            const payload = JSON.parse(message.payload);
-
-            // Create SDP answer
-            const answer = new RTCSessionDescription({
-              type: 'answer',
-              sdp: payload.sdp
-            });
-
-            // Set remote description
-            await peerConnection.setRemoteDescription(answer);
-            log('Remote description set');
-            break;
-
-          case 'ice_candidate':
-            log('Received ICE candidate');
-
-            // Parse payload
-            const candidateData = JSON.parse(message.payload);
-
-            // Create and add ICE candidate
-            const candidate = new RTCIceCandidate({
-              candidate: candidateData.candidate,
-              sdpMid: candidateData.sdpMid,
-              sdpMLineIndex: candidateData.sdpMLineIndex
-            });
-
-            await peerConnection.addIceCandidate(candidate);
-            log('ICE candidate added');
-            break;
-
-          case 'pong':
-            // Received pong (keep-alive response)
-            break;
-
-          case 'stream_ended':
-            log('Stream has ended', 'warning');
-            disconnect();
-            break;
-
-          case 'error':
-            log(`Received error: ${message.payload}`, 'error');
-            break;
-
-          default:
-            log(`Received unknown message type: ${message.type}`, 'warning');
-            break;
-        }
-      } catch (error) {
-        log(`Error handling message: ${error.message}`, 'error');
-      }
+async function handleSignalingMessage(message) {
+  try {
+    // Make sure we only process messages for our client
+    if (message.recipient_id && message.recipient_id !== clientId && message.recipient_id !== 'all') {
+      return;
     }
 
+    switch (message.type) {
+      case 'answer':
+        log('Received SDP answer');
+
+        // Parse payload
+        let payload;
+        try {
+          payload = JSON.parse(message.payload);
+        } catch (e) {
+          // If payload is already an object, not a string
+          payload = message.payload;
+        }
+
+        // Create SDP answer
+        const answer = new RTCSessionDescription({
+          type: 'answer',
+          sdp: payload.sdp
+        });
+
+        // Set remote description
+        await peerConnection.setRemoteDescription(answer);
+        log('Remote description set');
+        break;
+
+      case 'ice_candidate':
+        log('Received ICE candidate');
+
+        // Parse payload
+        let candidateData;
+        try {
+          candidateData = JSON.parse(message.payload);
+        } catch (e) {
+          // If payload is already an object, not a string
+          candidateData = message.payload;
+        }
+
+        // Create and add ICE candidate
+        const candidate = new RTCIceCandidate({
+          candidate: candidateData.candidate,
+          sdpMid: candidateData.sdpMid,
+          sdpMLineIndex: candidateData.sdpMLineIndex
+        });
+
+        await peerConnection.addIceCandidate(candidate);
+        log('ICE candidate added');
+        break;
+
+      // Other case handlers remain the same
+    }
+  } catch (error) {
+    log(`Error handling message: ${error.message}`, 'error');
+  }
+}
     // Start sending periodic pings to keep connection alive
     function startPingInterval() {
       if (pingInterval) {
