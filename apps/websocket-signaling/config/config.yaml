@@ -1,13 +1,10 @@
-# apps/websocket-signaling/config/config.yaml
-# WebSocket Signaling Service Configuration
-
 # Service information
 service:
   name: websocket-signaling
   version: "0.1.0"
   description: "WebSocket signaling service for WebRTC connections"
   environment: development
-  node_id: ""  # Will be auto-generated if empty
+  node_id: ""  # Will be auto-generated if empty or provided via NODE_ID env var
 
 # HTTP server configuration for WebSocket connections and metrics
 http:
@@ -26,7 +23,7 @@ http:
 
 # gRPC server configuration
 grpc:
-  address: ":9095"
+  address: ":9095"  # IMPORTANT: Must match with webrtc-out service config
   max_concurrent_streams: 1000
   connection_timeout: 10s
   keep_alive_time: 30s
