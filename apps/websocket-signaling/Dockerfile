@@ -4,12 +4,22 @@ FROM golang:1.23.2-alpine AS builder
 # Set working directory
 WORKDIR /src
 
+# Install git and other necessary build tools
+RUN apk add --no-cache git
+
 # First, set up the proto module
 WORKDIR /src/libs/proto
 # Copy the proto module files
 COPY ./libs/proto/go.mod .
 COPY ./libs/proto/go.sum .
 RUN go mod tidy && go mod download
+
+# # Set up the health module
+# WORKDIR /src/libs/health
+# # Copy the health module files
+# COPY ./libs/health/go.mod .
+# COPY ./libs/health/go.sum .
+# RUN go mod tidy && go mod download
 
 # Copy proto source files
 COPY ./libs/proto/ .

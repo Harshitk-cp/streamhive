@@ -1,4 +1,3 @@
-// apps/webrtc-out/internal/handler/grpc.go
 package handler
 
 import (

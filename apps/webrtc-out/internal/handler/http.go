@@ -1,4 +1,3 @@
-// apps/webrtc-out/internal/handler/http.go
 package handler
 
 import (

@@ -1,4 +1,3 @@
-// apps/websocket-signaling/internal/handler/grpc.go
 package handler
 
 import (

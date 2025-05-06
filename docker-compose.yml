@@ -15,6 +15,8 @@ services:
     depends_on:
       - stream-router
       - rtmp-ingestor
+    networks:
+      - streamhive-network
 
   stream-router:
     build:
@@ -28,6 +30,8 @@ services:
     environment:
       - HTTP_ADDRESS=:8081
       - GRPC_ADDRESS=:9090
+    networks:
+      - streamhive-network
 
   rtmp-ingestor:
     build:
@@ -46,6 +50,8 @@ services:
     depends_on:
       - stream-router
       - frame-splitter
+    networks:
+      - streamhive-network
 
   frame-splitter:
     build:
@@ -63,38 +69,56 @@ services:
       - ROUTER_ADDRESS=stream-router:9090
     depends_on:
       - stream-router
+    networks:
+      - streamhive-network
 
   webrtc-out:
     build:
       context: .
       dockerfile: apps/webrtc-out/Dockerfile
     ports:
-      - "8085:8085"  # HTTP port for metrics and health checks
-      - "9094:9094"  # gRPC port
-    volumes:
-      - ./apps/webrtc-out/config:/app/config
+      - "8005:8005"  # HTTP port
     environment:
-      - HTTP_ADDRESS=:8085
-      - GRPC_ADDRESS=:9094
-      - SIGNALING_SERVICE=websocket-signaling:9095
+      - HTTP_ADDRESS=:8005
+      - GRPC_ADDRESS=:9050
+      - SIGNALING_SERVICE_ADDRESS=websocket-signaling:9002
+      - REDIS_ADDRESS=redis:6379
+      - NODE_ID=webrtc-out-1
+      - ICE_SERVERS=[{"urls":["stun:stun.l.google.com:19302"]}]
     depends_on:
+      - redis
       - websocket-signaling
+    networks:
+      - streamhive-network
 
+  # WebSocket Signaling
   websocket-signaling:
     build:
       context: .
       dockerfile: apps/websocket-signaling/Dockerfile
     ports:
-      - "8086:8086"  # HTTP port for WebSocket and metrics
-      - "9095:9095"  # gRPC port
-    volumes:
-      - ./apps/websocket-signaling/config:/app/config
+      - "8006:8006"  # WebSocket port
     environment:
-      - HTTP_ADDRESS=:8086
-      - GRPC_ADDRESS=:9095
-      - WEBSOCKET_ENDPOINT=/ws/stream
-      - ENABLE_CORS=true
-      - ALLOWED_ORIGINS=*
+      - HTTP_ADDRESS=:8006
+      - GRPC_ADDRESS=:9002
+      - REDIS_ADDRESS=redis:6379
+      - NODE_ID=websocket-signaling-1
+    depends_on:
+      - redis
+    networks:
+      - streamhive-network
+
+  # Redis (for service discovery, pub/sub, and caching)
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - streamhive-network
+
+networks:
+  streamhive-network:
+    driver: bridge
 
 volumes:
   frame-data:

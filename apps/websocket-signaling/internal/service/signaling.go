@@ -1,4 +1,3 @@
-// apps/websocket-signaling/internal/service/signaling.go
 package service
 
 import (
@@ -10,596 +9,386 @@ import (
 	"time"
 
 	"github.com/Harshitk-cp/streamhive/apps/websocket-signaling/internal/config"
-	"github.com/Harshitk-cp/streamhive/apps/websocket-signaling/internal/metrics"
+	"github.com/Harshitk-cp/streamhive/apps/websocket-signaling/internal/hub"
 	webrtcPb "github.com/Harshitk-cp/streamhive/libs/proto/webrtc"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
-// StreamInfo contains information about a registered stream
-type StreamInfo struct {
+// Client represents a connected WebSocket client
+type Client struct {
+	ID        string
 	StreamID  string
 	SessionID string
+	Connected bool
+	Hub       *hub.Hub
+}
+
+// WebRTCNode represents a WebRTC node
+type WebRTCNode struct {
+	ID            string
+	Address       string
+	Capabilities  []string
+	MaxStreams    int32
+	LastHeartbeat time.Time
+	ActiveStreams int32
+	Connections   int32
+	CPUUsage      float32
+	MemoryUsage   float32
+	Client        webrtcPb.WebRTCServiceClient
+	Conn          *grpc.ClientConn
+}
+
+// Stream represents a stream that clients can connect to
+type Stream struct {
+	ID        string
+	SessionID string
 	NodeID    string
+	Active    bool
 	Clients   map[string]*Client
-	CreatedAt time.Time
-	Mu        sync.RWMutex
 }
 
-// Client represents a WebSocket client
-type Client struct {
-	ID           string
-	UserID       string
-	StreamID     string
-	Send         chan []byte
-	LastActivity time.Time
-}
-
-// SignalingMessage represents a WebSocket signaling message
-type SignalingMessage struct {
-	Type      string          `json:"type"`
-	StreamID  string          `json:"streamId"`
-	UserID    string          `json:"userId,omitempty"`
-	SessionID string          `json:"sessionId,omitempty"`
-	Data      json.RawMessage `json:"data,omitempty"`
-}
-
-// SDPMessage represents an SDP message
-type SDPMessage struct {
-	Type string `json:"type"`
-	SDP  string `json:"sdp"`
-}
-
-// ICECandidateMessage represents an ICE candidate message
-type ICECandidateMessage struct {
-	Candidate     string `json:"candidate"`
-	SDPMid        string `json:"sdpMid"`
-	SDPMLineIndex uint32 `json:"sdpMLineIndex"`
-}
-
-// Service implements the signaling service
+// Service implements the SignalingService gRPC interface
 type Service struct {
-	config   *config.Config
-	metrics  metrics.Collector
-	streams  map[string]*StreamInfo
-	clients  map[string]*Client
-	streamMu sync.RWMutex
-	clientMu sync.RWMutex
+	config        *config.Config
+	hub           *hub.Hub
+	streams       map[string]*Stream
+	nodes         map[string]*WebRTCNode
+	clients       map[string]*Client
+	streamsMu     sync.RWMutex
+	nodesMu       sync.RWMutex
+	clientsMu     sync.RWMutex
+	stopChan      chan struct{}
+	cleanupTicker *time.Ticker
+
+	webrtcPb.UnimplementedSignalingServiceServer
+}
+
+// mustEmbedUnimplementedSignalingServiceServer implements webrtc.SignalingServiceServer.
+func (s *Service) mustEmbedUnimplementedSignalingServiceServer() {
+	panic("unimplemented")
 }
 
 // New creates a new signaling service
-func New(cfg *config.Config, m metrics.Collector) *Service {
-	svc := &Service{
-		config:  cfg,
-		metrics: m,
-		streams: make(map[string]*StreamInfo),
-		clients: make(map[string]*Client),
+func New(cfg *config.Config) (*Service, error) {
+	h := hub.NewHub()
+
+	service := &Service{
+		config:        cfg,
+		hub:           h,
+		streams:       make(map[string]*Stream),
+		nodes:         make(map[string]*WebRTCNode),
+		clients:       make(map[string]*Client),
+		stopChan:      make(chan struct{}),
+		cleanupTicker: time.NewTicker(30 * time.Second),
 	}
 
-	// Start client session cleanup goroutine
-	go svc.cleanupSessions()
+	// Start the WebSocket hub
+	go h.Run()
 
-	return svc
+	// Start cleanup routine
+	go service.cleanup()
+
+	return service, nil
+}
+
+// cleanup periodically checks for stale nodes and streams
+func (s *Service) cleanup() {
+	for {
+		select {
+		case <-s.cleanupTicker.C:
+			now := time.Now()
+
+			// Check for stale nodes
+			s.nodesMu.Lock()
+			for id, node := range s.nodes {
+				if now.Sub(node.LastHeartbeat) > 1*time.Minute {
+					log.Printf("Removing stale WebRTC node %s", id)
+					// Close connection
+					if node.Conn != nil {
+						node.Conn.Close()
+					}
+					// Remove node
+					delete(s.nodes, id)
+				}
+			}
+			s.nodesMu.Unlock()
+
+		case <-s.stopChan:
+			s.cleanupTicker.Stop()
+			return
+		}
+	}
 }
 
 // RegisterStream registers a stream with the signaling service
 func (s *Service) RegisterStream(ctx context.Context, req *webrtcPb.RegisterStreamRequest) (*webrtcPb.RegisterStreamResponse, error) {
-	s.streamMu.Lock()
-	defer s.streamMu.Unlock()
+	s.streamsMu.Lock()
+	defer s.streamsMu.Unlock()
 
-	// Check if stream already exists
-	if _, exists := s.streams[req.StreamId]; exists {
-		return &webrtcPb.RegisterStreamResponse{Success: false}, fmt.Errorf("stream already registered: %s", req.StreamId)
+	// Check if node exists
+	s.nodesMu.RLock()
+	_, nodeExists := s.nodes[req.NodeId]
+	s.nodesMu.RUnlock()
+
+	if !nodeExists {
+		return nil, status.Errorf(codes.NotFound, "node not found: %s", req.NodeId)
 	}
 
-	// Check if maximum number of streams is reached
-	if len(s.streams) >= s.config.Stream.MaxStreams {
-		return &webrtcPb.RegisterStreamResponse{Success: false}, fmt.Errorf("maximum number of streams reached")
+	// Create or update stream
+	stream, exists := s.streams[req.StreamId]
+	if !exists {
+		stream = &Stream{
+			ID:        req.StreamId,
+			SessionID: req.SessionId,
+			NodeID:    req.NodeId,
+			Active:    true,
+			Clients:   make(map[string]*Client),
+		}
+		s.streams[req.StreamId] = stream
+		log.Printf("Registered new stream %s on node %s", req.StreamId, req.NodeId)
+	} else {
+		// Update existing stream
+		stream.NodeID = req.NodeId
+		stream.SessionID = req.SessionId
+		stream.Active = true
+		log.Printf("Updated stream %s to node %s", req.StreamId, req.NodeId)
 	}
 
-	// Create stream
-	stream := &StreamInfo{
-		StreamID:  req.StreamId,
-		SessionID: req.SessionId,
-		NodeID:    req.NodeId,
-		Clients:   make(map[string]*Client),
-		CreatedAt: time.Now(),
-	}
-
-	// Store stream
-	s.streams[req.StreamId] = stream
-
-	// Record metric
-	s.metrics.StreamRegistered(req.StreamId)
-
-	log.Printf("Stream registered: %s (node: %s)", req.StreamId, req.NodeId)
-
-	return &webrtcPb.RegisterStreamResponse{Success: true}, nil
+	return &webrtcPb.RegisterStreamResponse{
+		Success: true,
+	}, nil
 }
 
 // UnregisterStream unregisters a stream from the signaling service
 func (s *Service) UnregisterStream(ctx context.Context, req *webrtcPb.UnregisterStreamRequest) (*webrtcPb.UnregisterStreamResponse, error) {
-	s.streamMu.Lock()
-	defer s.streamMu.Unlock()
+	s.streamsMu.Lock()
+	defer s.streamsMu.Unlock()
 
-	// Check if stream exists
 	stream, exists := s.streams[req.StreamId]
 	if !exists {
-		return &webrtcPb.UnregisterStreamResponse{Success: false}, fmt.Errorf("stream not found: %s", req.StreamId)
+		return nil, status.Errorf(codes.NotFound, "stream not found: %s", req.StreamId)
 	}
 
-	// Check if session ID matches
+	// Check session ID
 	if stream.SessionID != req.SessionId {
-		return &webrtcPb.UnregisterStreamResponse{Success: false}, fmt.Errorf("session ID mismatch")
+		return nil, status.Errorf(codes.PermissionDenied, "session ID mismatch")
 	}
 
-	// Disconnect all clients
-	stream.Mu.Lock()
-	for _, client := range stream.Clients {
-		s.DisconnectClient(client)
+	// Check node ID
+	if stream.NodeID != req.NodeId {
+		return nil, status.Errorf(codes.PermissionDenied, "node ID mismatch")
 	}
-	stream.Mu.Unlock()
+
+	// Mark stream as inactive
+	stream.Active = false
+
+	// Notify all connected clients that the stream has ended
+	for _, client := range stream.Clients {
+		if client.Connected {
+			message := map[string]interface{}{
+				"type":      "stream_ended",
+				"stream_id": req.StreamId,
+			}
+			jsonMessage, _ := json.Marshal(message)
+			client.Hub.SendToClient(client.ID, jsonMessage)
+		}
+	}
 
 	// Remove stream
 	delete(s.streams, req.StreamId)
 
-	// Record metric
-	s.metrics.StreamUnregistered(req.StreamId)
+	log.Printf("Unregistered stream %s from node %s", req.StreamId, req.NodeId)
 
-	log.Printf("Stream unregistered: %s (node: %s)", req.StreamId, req.NodeId)
-
-	return &webrtcPb.UnregisterStreamResponse{Success: true}, nil
+	return &webrtcPb.UnregisterStreamResponse{
+		Success: true,
+	}, nil
 }
 
-// GetStreamInfo returns information about a stream
-func (s *Service) GetStreamInfo(streamID string) (*StreamInfo, error) {
-	s.streamMu.RLock()
-	defer s.streamMu.RUnlock()
+// RegisterWebRTCNode registers a WebRTC node with the signaling service
+func (s *Service) RegisterWebRTCNode(ctx context.Context, req *webrtcPb.RegisterWebRTCNodeRequest) (*webrtcPb.RegisterWebRTCNodeResponse, error) {
+	// Connect to the WebRTC node
+	conn, err := grpc.Dial(req.Address,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)))
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "failed to connect to WebRTC node: %v", err)
+	}
 
-	// Check if stream exists
+	// Create WebRTC client
+	client := webrtcPb.NewWebRTCServiceClient(conn)
+
+	// Register node
+	s.nodesMu.Lock()
+	defer s.nodesMu.Unlock()
+
+	node := &WebRTCNode{
+		ID:            req.NodeId,
+		Address:       req.Address,
+		Capabilities:  req.Capabilities,
+		MaxStreams:    req.MaxStreams,
+		LastHeartbeat: time.Now(),
+		Client:        client,
+		Conn:          conn,
+	}
+
+	s.nodes[req.NodeId] = node
+
+	log.Printf("Registered WebRTC node %s at %s", req.NodeId, req.Address)
+
+	return &webrtcPb.RegisterWebRTCNodeResponse{
+		Success: true,
+	}, nil
+}
+
+// SendNodeHeartbeat processes a heartbeat from a WebRTC node
+func (s *Service) SendNodeHeartbeat(ctx context.Context, req *webrtcPb.NodeHeartbeatRequest) (*webrtcPb.NodeHeartbeatResponse, error) {
+	s.nodesMu.Lock()
+	defer s.nodesMu.Unlock()
+
+	node, exists := s.nodes[req.NodeId]
+	if !exists {
+		return nil, status.Errorf(codes.NotFound, "node not found: %s", req.NodeId)
+	}
+
+	// Update node status
+	node.LastHeartbeat = time.Now()
+	node.ActiveStreams = req.ActiveStreams
+	node.Connections = req.ActiveConnections
+	node.CPUUsage = req.CpuUsage
+	node.MemoryUsage = req.MemoryUsage
+
+	return &webrtcPb.NodeHeartbeatResponse{
+		Success:    true,
+		ServerTime: time.Now().UnixNano() / int64(time.Millisecond),
+	}, nil
+}
+
+// ForwardSignalingMessage forwards a signaling message to a client
+func (s *Service) ForwardSignalingMessage(ctx context.Context, req *webrtcPb.SignalingForwardRequest) (*webrtcPb.SignalingForwardResponse, error) {
+	// Check if client exists
+	s.clientsMu.RLock()
+	client, exists := s.clients[req.RecipientId]
+	s.clientsMu.RUnlock()
+
+	if !exists || !client.Connected {
+		return nil, status.Errorf(codes.NotFound, "client not found or not connected: %s", req.RecipientId)
+	}
+
+	// Create message
+	message := map[string]interface{}{
+		"type":         req.MessageType,
+		"stream_id":    req.StreamId,
+		"sender_id":    req.SenderId,
+		"recipient_id": req.RecipientId,
+		"payload":      string(req.Payload),
+	}
+
+	// Convert to JSON
+	jsonMessage, err := json.Marshal(message)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to marshal message: %v", err)
+	}
+
+	// Send message to client
+	client.Hub.SendToClient(client.ID, jsonMessage)
+
+	return &webrtcPb.SignalingForwardResponse{
+		Success: true,
+	}, nil
+}
+
+// GetNodeForStream returns the WebRTC node for a stream
+func (s *Service) GetNodeForStream(streamID string) (*WebRTCNode, error) {
+	s.streamsMu.RLock()
 	stream, exists := s.streams[streamID]
-	if !exists {
-		return nil, fmt.Errorf("stream not found: %s", streamID)
+	s.streamsMu.RUnlock()
+
+	if !exists || !stream.Active {
+		return nil, fmt.Errorf("stream not found or not active: %s", streamID)
 	}
 
-	return stream, nil
-}
-
-// RegisterClient registers a new client
-func (s *Service) RegisterClient(streamID, userID string) (*Client, error) {
-	// Check if stream exists
-	s.streamMu.RLock()
-	stream, exists := s.streams[streamID]
-	s.streamMu.RUnlock()
+	s.nodesMu.RLock()
+	node, exists := s.nodes[stream.NodeID]
+	s.nodesMu.RUnlock()
 
 	if !exists {
-		return nil, fmt.Errorf("stream not found: %s", streamID)
+		return nil, fmt.Errorf("node not found for stream: %s", streamID)
 	}
 
-	// Check if maximum number of clients is reached
-	stream.Mu.RLock()
-	clientCount := len(stream.Clients)
-	stream.Mu.RUnlock()
-
-	if clientCount >= s.config.Stream.MaxClientsPerStream {
-		return nil, fmt.Errorf("maximum number of clients reached for stream: %s", streamID)
-	}
-
-	// Create client
-	clientID := fmt.Sprintf("%s-%s", streamID, userID)
-	client := &Client{
-		ID:           clientID,
-		UserID:       userID,
-		StreamID:     streamID,
-		Send:         make(chan []byte, s.config.WebSocket.MessageBufferSize),
-		LastActivity: time.Now(),
-	}
-
-	// Store client
-	s.clientMu.Lock()
-	s.clients[clientID] = client
-	s.clientMu.Unlock()
-
-	// Add client to stream
-	stream.Mu.Lock()
-	stream.Clients[userID] = client
-	stream.Mu.Unlock()
-
-	// Record metric
-	s.metrics.ClientConnected(streamID, userID)
-
-	log.Printf("Client registered: %s (stream: %s)", userID, streamID)
-
-	return client, nil
+	return node, nil
 }
 
-// UnregisterClient unregisters a client
-func (s *Service) UnregisterClient(streamID, userID string) {
-	clientID := fmt.Sprintf("%s-%s", streamID, userID)
-
-	// Get client
-	s.clientMu.RLock()
-	client, exists := s.clients[clientID]
-	s.clientMu.RUnlock()
-
-	if !exists {
-		return
+// GetStatus returns the current status of the service
+func (s *Service) GetStatus() (map[string]*WebRTCNode, map[string]*Stream, map[string]*Client) {
+	s.nodesMu.RLock()
+	nodes := make(map[string]*WebRTCNode, len(s.nodes))
+	for k, v := range s.nodes {
+		nodes[k] = v
 	}
+	s.nodesMu.RUnlock()
 
-	s.DisconnectClient(client)
+	s.streamsMu.RLock()
+	streams := make(map[string]*Stream, len(s.streams))
+	for k, v := range s.streams {
+		streams[k] = v
+	}
+	s.streamsMu.RUnlock()
+
+	s.clientsMu.RLock()
+	clients := make(map[string]*Client, len(s.clients))
+	for k, v := range s.clients {
+		clients[k] = v
+	}
+	s.clientsMu.RUnlock()
+
+	return nodes, streams, clients
 }
 
-// DisconnectClient disconnects a client and cleans up resources
-func (s *Service) DisconnectClient(client *Client) {
-	// Remove client from stream
-	s.streamMu.RLock()
-	stream, exists := s.streams[client.StreamID]
-	s.streamMu.RUnlock()
+// GetNodes returns all registered WebRTC nodes
+func (s *Service) GetNodes() map[string]*WebRTCNode {
+	s.nodesMu.RLock()
+	defer s.nodesMu.RUnlock()
 
-	if exists {
-		stream.Mu.Lock()
-		delete(stream.Clients, client.UserID)
-		stream.Mu.Unlock()
+	nodes := make(map[string]*WebRTCNode, len(s.nodes))
+	for k, v := range s.nodes {
+		nodes[k] = v
 	}
 
-	// Remove client from clients map
-	s.clientMu.Lock()
-	delete(s.clients, client.ID)
-	s.clientMu.Unlock()
-
-	// Close send channel
-	close(client.Send)
-
-	// Record metric
-	s.metrics.ClientDisconnected(client.StreamID, client.UserID)
-
-	log.Printf("Client unregistered: %s (stream: %s)", client.UserID, client.StreamID)
+	return nodes
 }
 
-// HandleMessage handles a WebSocket message
-func (s *Service) HandleMessage(clientID string, message []byte) error {
-	// Get client
-	s.clientMu.RLock()
-	client, exists := s.clients[clientID]
-	s.clientMu.RUnlock()
+// GetStreams returns all registered streams
+func (s *Service) GetStreams() map[string]*Stream {
+	s.streamsMu.RLock()
+	defer s.streamsMu.RUnlock()
 
-	if !exists {
-		return fmt.Errorf("client not found: %s", clientID)
+	streams := make(map[string]*Stream, len(s.streams))
+	for k, v := range s.streams {
+		streams[k] = v
 	}
 
-	// Update client activity
-	client.LastActivity = time.Now()
-
-	// Parse message
-	var signalingMsg SignalingMessage
-	if err := json.Unmarshal(message, &signalingMsg); err != nil {
-		s.metrics.SignalingMessageError(client.StreamID, "unknown", "parse_error")
-		return fmt.Errorf("failed to parse message: %w", err)
-	}
-
-	// Validate stream ID matches
-	if signalingMsg.StreamID != client.StreamID {
-		s.metrics.SignalingMessageError(client.StreamID, signalingMsg.Type, "stream_mismatch")
-		return fmt.Errorf("stream ID mismatch")
-	}
-
-	// Record metric
-	s.metrics.SignalingMessageReceived(client.StreamID, signalingMsg.Type, len(message))
-
-	// Handle message based on type
-	switch signalingMsg.Type {
-	case "offer":
-		return s.handleOfferMessage(client, &signalingMsg)
-	case "answer":
-		return s.handleAnswerMessage(client, &signalingMsg)
-	case "ice-candidate":
-		return s.handleICECandidateMessage(client, &signalingMsg)
-	case "ping":
-		return s.handlePingMessage(client, &signalingMsg)
-	default:
-		s.metrics.SignalingMessageError(client.StreamID, signalingMsg.Type, "unknown_type")
-		return fmt.Errorf("unknown message type: %s", signalingMsg.Type)
-	}
+	return streams
 }
 
-// handleOfferMessage handles an SDP offer message
-func (s *Service) handleOfferMessage(client *Client, msg *SignalingMessage) error {
-	// Parse SDP data
-	var sdpMsg SDPMessage
-	if err := json.Unmarshal(msg.Data, &sdpMsg); err != nil {
-		s.metrics.SignalingMessageError(client.StreamID, msg.Type, "parse_error")
-		return fmt.Errorf("failed to parse SDP data: %w", err)
-	}
+// Close closes the service and releases resources
+func (s *Service) Close() error {
+	// Signal goroutines to stop
+	close(s.stopChan)
 
-	// Get stream info
-	s.streamMu.RLock()
-	stream, exists := s.streams[client.StreamID]
-	s.streamMu.RUnlock()
-
-	if !exists {
-		s.metrics.SignalingMessageError(client.StreamID, msg.Type, "stream_not_found")
-		return fmt.Errorf("stream not found: %s", client.StreamID)
-	}
-
-	// Create response
-	response := SignalingMessage{
-		Type:     "offer",
-		StreamID: client.StreamID,
-		UserID:   client.UserID,
-		Data:     msg.Data,
-	}
-
-	// Serialize response
-	respData, err := json.Marshal(response)
-	if err != nil {
-		s.metrics.SignalingMessageError(client.StreamID, msg.Type, "marshal_error")
-		return fmt.Errorf("failed to marshal response: %w", err)
-	}
-
-	// Broadcast to other clients in the same stream
-	stream.Mu.RLock()
-	for _, otherClient := range stream.Clients {
-		// Skip the sender
-		if otherClient.UserID == client.UserID {
-			continue
-		}
-
-		select {
-		case otherClient.Send <- respData:
-			s.metrics.SignalingMessageSent(client.StreamID, msg.Type, len(respData))
-		default:
-			s.metrics.SignalingMessageError(client.StreamID, msg.Type, "send_buffer_full")
-			log.Printf("Failed to send message to client: %s (buffer full)", otherClient.UserID)
+	// Close all node connections
+	s.nodesMu.Lock()
+	for _, node := range s.nodes {
+		if node.Conn != nil {
+			node.Conn.Close()
 		}
 	}
-	stream.Mu.RUnlock()
+	s.nodesMu.Unlock()
+
+	// Stop WebSocket hub
+	s.hub.Close()
 
 	return nil
-}
-
-// handleAnswerMessage handles an SDP answer message
-func (s *Service) handleAnswerMessage(client *Client, msg *SignalingMessage) error {
-	// Parse SDP data
-	var sdpMsg SDPMessage
-	if err := json.Unmarshal(msg.Data, &sdpMsg); err != nil {
-		s.metrics.SignalingMessageError(client.StreamID, msg.Type, "parse_error")
-		return fmt.Errorf("failed to parse SDP data: %w", err)
-	}
-
-	// Get stream info
-	s.streamMu.RLock()
-	stream, exists := s.streams[client.StreamID]
-	s.streamMu.RUnlock()
-
-	if !exists {
-		s.metrics.SignalingMessageError(client.StreamID, msg.Type, "stream_not_found")
-		return fmt.Errorf("stream not found: %s", client.StreamID)
-	}
-
-	// Create response
-	response := SignalingMessage{
-		Type:     "answer",
-		StreamID: client.StreamID,
-		UserID:   client.UserID,
-		Data:     msg.Data,
-	}
-
-	// Serialize response
-	respData, err := json.Marshal(response)
-	if err != nil {
-		s.metrics.SignalingMessageError(client.StreamID, msg.Type, "marshal_error")
-		return fmt.Errorf("failed to marshal response: %w", err)
-	}
-
-	// Forward to the target client
-	if msg.UserID != "" {
-		stream.Mu.RLock()
-		targetClient, exists := stream.Clients[msg.UserID]
-		stream.Mu.RUnlock()
-
-		if exists {
-			select {
-			case targetClient.Send <- respData:
-				s.metrics.SignalingMessageSent(client.StreamID, msg.Type, len(respData))
-			default:
-				s.metrics.SignalingMessageError(client.StreamID, msg.Type, "send_buffer_full")
-				log.Printf("Failed to send message to client: %s (buffer full)", targetClient.UserID)
-			}
-		} else {
-			s.metrics.SignalingMessageError(client.StreamID, msg.Type, "target_client_not_found")
-			return fmt.Errorf("target client not found: %s", msg.UserID)
-		}
-	} else {
-		// Broadcast to all other clients
-		stream.Mu.RLock()
-		for _, otherClient := range stream.Clients {
-			// Skip the sender
-			if otherClient.UserID == client.UserID {
-				continue
-			}
-
-			select {
-			case otherClient.Send <- respData:
-				s.metrics.SignalingMessageSent(client.StreamID, msg.Type, len(respData))
-			default:
-				s.metrics.SignalingMessageError(client.StreamID, msg.Type, "send_buffer_full")
-				log.Printf("Failed to send message to client: %s (buffer full)", otherClient.UserID)
-			}
-		}
-		stream.Mu.RUnlock()
-	}
-
-	return nil
-}
-
-// handleICECandidateMessage handles an ICE candidate message
-func (s *Service) handleICECandidateMessage(client *Client, msg *SignalingMessage) error {
-	// Parse ICE candidate data
-	var iceMsg ICECandidateMessage
-	if err := json.Unmarshal(msg.Data, &iceMsg); err != nil {
-		s.metrics.SignalingMessageError(client.StreamID, msg.Type, "parse_error")
-		return fmt.Errorf("failed to parse ICE candidate data: %w", err)
-	}
-
-	// Get stream info
-	s.streamMu.RLock()
-	stream, exists := s.streams[client.StreamID]
-	s.streamMu.RUnlock()
-
-	if !exists {
-		s.metrics.SignalingMessageError(client.StreamID, msg.Type, "stream_not_found")
-		return fmt.Errorf("stream not found: %s", client.StreamID)
-	}
-
-	// Create response
-	response := SignalingMessage{
-		Type:     "ice-candidate",
-		StreamID: client.StreamID,
-		UserID:   client.UserID,
-		Data:     msg.Data,
-	}
-
-	// Serialize response
-	respData, err := json.Marshal(response)
-	if err != nil {
-		s.metrics.SignalingMessageError(client.StreamID, msg.Type, "marshal_error")
-		return fmt.Errorf("failed to marshal response: %w", err)
-	}
-
-	// Forward to the target client
-	if msg.UserID != "" {
-		stream.Mu.RLock()
-		targetClient, exists := stream.Clients[msg.UserID]
-		stream.Mu.RUnlock()
-
-		if exists {
-			select {
-			case targetClient.Send <- respData:
-				s.metrics.SignalingMessageSent(client.StreamID, msg.Type, len(respData))
-			default:
-				s.metrics.SignalingMessageError(client.StreamID, msg.Type, "send_buffer_full")
-				log.Printf("Failed to send message to client: %s (buffer full)", targetClient.UserID)
-			}
-		} else {
-			s.metrics.SignalingMessageError(client.StreamID, msg.Type, "target_client_not_found")
-			return fmt.Errorf("target client not found: %s", msg.UserID)
-		}
-	} else {
-		// Broadcast to all other clients
-		stream.Mu.RLock()
-		for _, otherClient := range stream.Clients {
-			// Skip the sender
-			if otherClient.UserID == client.UserID {
-				continue
-			}
-
-			select {
-			case otherClient.Send <- respData:
-				s.metrics.SignalingMessageSent(client.StreamID, msg.Type, len(respData))
-			default:
-				s.metrics.SignalingMessageError(client.StreamID, msg.Type, "send_buffer_full")
-				log.Printf("Failed to send message to client: %s (buffer full)", otherClient.UserID)
-			}
-		}
-		stream.Mu.RUnlock()
-	}
-
-	return nil
-}
-
-// handlePingMessage handles a ping message
-func (s *Service) handlePingMessage(client *Client, msg *SignalingMessage) error {
-	// Create pong response
-	response := SignalingMessage{
-		Type:     "pong",
-		StreamID: client.StreamID,
-		UserID:   client.UserID,
-	}
-
-	// Serialize response
-	respData, err := json.Marshal(response)
-	if err != nil {
-		s.metrics.SignalingMessageError(client.StreamID, msg.Type, "marshal_error")
-		return fmt.Errorf("failed to marshal response: %w", err)
-	}
-
-	// Send pong response
-	select {
-	case client.Send <- respData:
-		s.metrics.SignalingMessageSent(client.StreamID, "pong", len(respData))
-	default:
-		s.metrics.SignalingMessageError(client.StreamID, msg.Type, "send_buffer_full")
-		return fmt.Errorf("failed to send pong message: buffer full")
-	}
-
-	return nil
-}
-
-// cleanupSessions periodically cleans up inactive sessions
-func (s *Service) cleanupSessions() {
-	ticker := time.NewTicker(1 * time.Minute)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			s.cleanupInactiveClients()
-			s.cleanupExpiredStreams()
-		}
-	}
-}
-
-// cleanupInactiveClients cleans up inactive clients
-func (s *Service) cleanupInactiveClients() {
-	now := time.Now()
-	threshold := now.Add(-s.config.WebSocket.ClientSessionTimeout)
-
-	// Get inactive clients
-	var inactiveClients []*Client
-	s.clientMu.RLock()
-	for _, client := range s.clients {
-		if client.LastActivity.Before(threshold) {
-			inactiveClients = append(inactiveClients, client)
-		}
-	}
-	s.clientMu.RUnlock()
-
-	// Disconnect inactive clients
-	for _, client := range inactiveClients {
-		log.Printf("Disconnecting inactive client: %s (stream: %s)", client.UserID, client.StreamID)
-		s.DisconnectClient(client)
-	}
-}
-
-// cleanupExpiredStreams cleans up expired streams
-func (s *Service) cleanupExpiredStreams() {
-	now := time.Now()
-	threshold := now.Add(-s.config.Stream.StreamTimeout)
-
-	// Get expired streams
-	var expiredStreams []string
-	s.streamMu.RLock()
-	for streamID, stream := range s.streams {
-		if stream.CreatedAt.Before(threshold) {
-			expiredStreams = append(expiredStreams, streamID)
-		}
-	}
-	s.streamMu.RUnlock()
-
-	// Remove expired streams
-	for _, streamID := range expiredStreams {
-		s.streamMu.Lock()
-		if stream, exists := s.streams[streamID]; exists {
-			// Disconnect all clients
-			stream.Mu.Lock()
-			for _, client := range stream.Clients {
-				s.DisconnectClient(client)
-			}
-			stream.Mu.Unlock()
-
-			// Remove stream
-			delete(s.streams, streamID)
-			s.metrics.StreamUnregistered(streamID)
-			log.Printf("Stream expired: %s", streamID)
-		}
-		s.streamMu.Unlock()
-	}
 }

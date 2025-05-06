@@ -21,6 +21,13 @@ COPY ./apps/webrtc-out/go.mod .
 COPY ./apps/webrtc-out/go.sum .
 RUN go mod tidy && go mod download
 
+# # Set up the health module
+# WORKDIR /src/libs/health
+# # Copy the health module files
+# COPY ./libs/health/go.mod .
+# COPY ./libs/health/go.sum .
+# RUN go mod tidy && go mod download
+
 # Copy source code
 COPY ./apps/webrtc-out/ .
 
