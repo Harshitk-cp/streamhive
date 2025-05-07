@@ -7,7 +7,7 @@ replace github.com/Harshitk-cp/streamhive/libs/proto => ../../libs/proto
 // replace github.com/Harshitk-cp/streamhive/libs/health => ../../libs/health
 
 require (
-	github.com/Harshitk-cp/streamhive/libs/proto v0.0.0-20250505063951-8bbcb806e434
+	github.com/Harshitk-cp/streamhive/libs/proto v0.0.0-20250506103320-4238be4c09b6
 	github.com/pion/webrtc/v3 v3.3.5
 	github.com/prometheus/client_golang v1.22.0
 	google.golang.org/grpc v1.72.0

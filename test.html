@@ -354,7 +354,7 @@
 
             <div class="form-group">
               <label for="serverUrl" class="form-label">Server URL</label>
-              <input type="text" id="serverUrl" class="form-control" value="ws://localhost:8086/ws" placeholder="WebSocket URL">
+              <input type="text" id="serverUrl" class="form-control" value="ws://localhost:8087/ws" placeholder="WebSocket URL">
             </div>
           </div>
 
@@ -790,17 +790,24 @@
     // Handle incoming signaling messages
     async function handleSignalingMessage(message) {
       try {
+        console.log("Received message type:", message.type, message);
+
         switch (message.type) {
-          case 'answer':
+          case "answer":
             log('Received SDP answer');
 
             // Parse payload
-            const payload = JSON.parse(message.payload);
+            let answerData;
+            if (typeof message.payload === 'string') {
+              answerData = JSON.parse(message.payload);
+            } else {
+              answerData = message.payload;
+            }
 
             // Create SDP answer
             const answer = new RTCSessionDescription({
               type: 'answer',
-              sdp: payload.sdp
+              sdp: answerData.sdp
             });
 
             // Set remote description
@@ -808,11 +815,16 @@
             log('Remote description set');
             break;
 
-          case 'ice_candidate':
+          case "ice_candidate":
             log('Received ICE candidate');
 
             // Parse payload
-            const candidateData = JSON.parse(message.payload);
+            let candidateData;
+            if (typeof message.payload === 'string') {
+              candidateData = JSON.parse(message.payload);
+            } else {
+              candidateData = message.payload;
+            }
 
             // Create and add ICE candidate
             const candidate = new RTCIceCandidate({
@@ -825,17 +837,17 @@
             log('ICE candidate added');
             break;
 
-          case 'pong':
+          case "error":
+            handleErrorMessage(message);
+            break;
+
+          case "pong":
             // Received pong (keep-alive response)
             break;
 
-          case 'stream_ended':
+          case "stream_ended":
             log('Stream has ended', 'warning');
             disconnect();
-            break;
-
-          case 'error':
-            log(`Received error: ${message.payload}`, 'error');
             break;
 
           default:
@@ -844,7 +856,70 @@
         }
       } catch (error) {
         log(`Error handling message: ${error.message}`, 'error');
+        console.error("Message that caused error:", message);
       }
+    }
+
+    // Handle error messages
+    function handleErrorMessage(message) {
+      try {
+        console.log("Error payload:", message.payload, typeof message.payload);
+
+        // Parse the payload if it's a string, otherwise use it directly
+        let errorData;
+        if (typeof message.payload === 'string') {
+          errorData = JSON.parse(message.payload);
+        } else {
+          errorData = message.payload;
+        }
+
+        log(`Connection error: ${errorData.message || 'Unknown error'}`, 'error');
+
+        // Update UI to reflect the error
+        updateConnectionStatus('offline');
+        statusText.textContent = errorData.message || 'Connection error';
+        statusOverlay.classList.remove('hidden');
+
+        // Handle specific error types
+        switch(errorData.code) {
+          case "service_unavailable":
+            setTimeout(() => {
+              log("Attempting to reconnect...", 'info');
+              reconnect();
+            }, 5000);
+            break;
+
+          case "offer_rejected":
+            log("Connection was rejected, please try again later", 'error');
+            break;
+
+          case "invalid_offer":
+            log("Invalid connection request", 'error');
+            break;
+
+          default:
+            // Generic handling
+            break;
+        }
+      } catch (err) {
+        // If we can't parse the error payload, log that error
+        log(`Error parsing error message: ${err.message}`, 'error');
+        console.error("Original error payload:", message.payload);
+      }
+    }
+
+    // Reconnection function
+    function reconnect() {
+      // Reset connection if needed
+      if (peerConnection && peerConnection.signalingState !== 'closed') {
+        peerConnection.close();
+      }
+
+      // Re-create peer connection
+      createPeerConnection();
+
+      // Start connection process again
+      connect();
     }
 
     // Start sending periodic pings to keep connection alive
@@ -952,7 +1027,7 @@
       }
     }
 
-    // Update connection status UI
+// Update connection status UI
     function updateConnectionStatus(status) {
       connectionStatus.className = `badge badge-${status}`;
 

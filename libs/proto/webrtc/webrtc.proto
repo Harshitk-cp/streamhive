@@ -2,254 +2,95 @@ syntax = "proto3";
 
 package webrtc;
 
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
 option go_package = "libs/proto/webrtc";
 
-// WebRTC service for managing WebRTC streams
+// WebRTCService handles WebRTC operations
 service WebRTCService {
-  // Create a new stream
-  rpc CreateStream(CreateStreamRequest) returns (CreateStreamResponse);
+  // HandleOffer handles an SDP offer from a viewer
+  rpc HandleOffer(OfferRequest) returns (AnswerResponse);
 
-  // Destroy a stream
-  rpc DestroyStream(DestroyStreamRequest) returns (DestroyStreamResponse);
+  // HandleICECandidate handles an ICE candidate from a viewer
+  rpc HandleICECandidate(ICECandidateRequest) returns (google.protobuf.Empty);
 
-  // Add a video frame to a stream
-  rpc AddVideoFrame(AddVideoFrameRequest) returns (AddVideoFrameResponse);
+  // GetStreamInfo gets information about a stream
+  rpc GetStreamInfo(GetStreamInfoRequest) returns (StreamInfo);
 
-  // Add an audio frame to a stream
-  rpc AddAudioFrame(AddAudioFrameRequest) returns (AddAudioFrameResponse);
+  // RemoveStream removes a stream
+  rpc RemoveStream(RemoveStreamRequest) returns (google.protobuf.Empty);
 
-  // Get stats for a stream
-  rpc GetStreamStats(GetStreamStatsRequest) returns (GetStreamStatsResponse);
-
-  // Handle SDP offer from a viewer
-  rpc HandleOffer(SDPOfferRequest) returns (SDPAnswerResponse);
-
-  // Handle ICE candidate from a viewer
-  rpc HandleICECandidate(ICECandidateRequest) returns (ICECandidateResponse);
-
-  // Restart ICE for a peer connection
-  rpc RestartICE(RestartICERequest) returns (RestartICEResponse);
+  // PushFrame pushes a frame to a stream
+  rpc PushFrame(PushFrameRequest) returns (PushFrameResponse);
 }
 
-// Create stream request
-message CreateStreamRequest {
+// FrameType represents the type of media frame
+enum FrameType {
+  UNKNOWN = 0;
+  VIDEO = 1;
+  AUDIO = 2;
+  METADATA = 3;
+}
+
+// PushFrameRequest is a request to push a frame to a stream
+message PushFrameRequest {
   string stream_id = 1;
-  string session_id = 2;
+  string frame_id = 2;
+  FrameType type = 3;
+  bytes data = 4;
+  google.protobuf.Timestamp timestamp = 5;
+  bool is_key_frame = 6;
+  int64 sequence = 7;
+  map<string, string> metadata = 8;
 }
 
-// Create stream response
-message CreateStreamResponse {
+// PushFrameResponse is a response to a PushFrame request
+message PushFrameResponse {
+  string status = 1;
+}
+
+// OfferRequest contains an SDP offer from a viewer
+message OfferRequest {
   string stream_id = 1;
-  string session_id = 2;
-  string node_id = 3;
+  string viewer_id = 2;
+  string offer = 3;  // SDP offer
 }
 
-// Destroy stream request
-message DestroyStreamRequest {
+// AnswerResponse contains an SDP answer for a viewer
+message AnswerResponse {
   string stream_id = 1;
-  string session_id = 2;
+  string viewer_id = 2;
+  string answer = 3;  // SDP answer
 }
 
-// Destroy stream response
-message DestroyStreamResponse {
-  bool success = 1;
-}
-
-// Add video frame request
-message AddVideoFrameRequest {
-  string stream_id = 1;
-  bytes frame_data = 2;
-  bool is_key_frame = 3;
-  int64 timestamp = 4;
-}
-
-// Add video frame response
-message AddVideoFrameResponse {
-  bool success = 1;
-  bool dropped = 2;
-  int32 queue_depth = 3;
-}
-
-// Add audio frame request
-message AddAudioFrameRequest {
-  string stream_id = 1;
-  bytes frame_data = 2;
-  int64 timestamp = 3;
-}
-
-// Add audio frame response
-message AddAudioFrameResponse {
-  bool success = 1;
-  bool dropped = 2;
-  int32 queue_depth = 3;
-}
-
-// Get stream stats request
-message GetStreamStatsRequest {
-  string stream_id = 1;
-}
-
-// Get stream stats response
-message GetStreamStatsResponse {
-  string stream_id = 1;
-  int32 active_connections = 2;
-  int32 video_queue_depth = 3;
-  int32 audio_queue_depth = 4;
-}
-
-// SDP offer request
-message SDPOfferRequest {
-  string stream_id = 1;
-  string session_id = 2;
-  string user_id = 3;
-  string sdp = 4;
-}
-
-// SDP answer response
-message SDPAnswerResponse {
-  string stream_id = 1;
-  string session_id = 2;
-  string user_id = 3;
-  string sdp = 4;
-}
-
-// ICE candidate request
+// ICECandidateRequest contains an ICE candidate from a viewer
 message ICECandidateRequest {
   string stream_id = 1;
-  string user_id = 2;
+  string viewer_id = 2;
   string candidate = 3;
   string sdp_mid = 4;
-  uint32 sdp_m_line_index = 5;
+  uint32 sdp_mline_index = 5;
 }
 
-// ICE candidate response
-message ICECandidateResponse {
-  bool success = 1;
-}
-
-// Restart ICE request
-message RestartICERequest {
+// GetStreamInfoRequest is a request to get information about a stream
+message GetStreamInfoRequest {
   string stream_id = 1;
-  string user_id = 2;
 }
 
-// Restart ICE response
-message RestartICEResponse {
-  bool success = 1;
-  string error = 2;
-}
-
-// Signaling service for managing WebRTC signaling
-service SignalingService {
-  // Register a stream
-  rpc RegisterStream(RegisterStreamRequest) returns (RegisterStreamResponse);
-
-  // Unregister a stream
-  rpc UnregisterStream(UnregisterStreamRequest) returns (UnregisterStreamResponse);
-
-  // Register a WebRTC node
-  rpc RegisterWebRTCNode(RegisterWebRTCNodeRequest) returns (RegisterWebRTCNodeResponse);
-
-  // Send a heartbeat from a WebRTC node
-  rpc SendNodeHeartbeat(NodeHeartbeatRequest) returns (NodeHeartbeatResponse);
-
-  // Forward signaling messages to/from clients
-  rpc ForwardSignalingMessage(SignalingForwardRequest) returns (SignalingForwardResponse);
-
-  // Register a client
-  rpc RegisterClient(RegisterClientRequest) returns (RegisterClientResponse);
-
-  // Unregister a client
-  rpc UnregisterClient(UnregisterClientRequest) returns (UnregisterClientResponse);
-}
-
-// Register stream request
-message RegisterStreamRequest {
+// StreamInfo contains information about a WebRTC stream
+message StreamInfo {
   string stream_id = 1;
-  string session_id = 2;
-  string node_id = 3;
+  string status = 2;
+  int32 current_viewers = 3;
+  int32 total_viewers = 4;
+  int32 width = 5;
+  int32 height = 6;
+  float frame_rate = 7;
+  int64 total_frames = 8;
 }
 
-// Register stream response
-message RegisterStreamResponse {
-  bool success = 1;
-}
-
-// Unregister stream request
-message UnregisterStreamRequest {
+// RemoveStreamRequest is a request to remove a stream
+message RemoveStreamRequest {
   string stream_id = 1;
-  string session_id = 2;
-  string node_id = 3;
-}
-
-// Unregister stream response
-message UnregisterStreamResponse {
-  bool success = 1;
-}
-
-// Register WebRTC node request
-message RegisterWebRTCNodeRequest {
-  string node_id = 1;
-  string address = 2;
-  repeated string capabilities = 3;
-  int32 max_streams = 4;
-}
-
-// Register WebRTC node response
-message RegisterWebRTCNodeResponse {
-  bool success = 1;
-}
-
-// WebRTC node heartbeat request
-message NodeHeartbeatRequest {
-  string node_id = 1;
-  int32 active_streams = 2;
-  int32 active_connections = 3;
-  float cpu_usage = 4;
-  float memory_usage = 5;
-}
-
-// WebRTC node heartbeat response
-message NodeHeartbeatResponse {
-  bool success = 1;
-  int64 server_time = 2;
-}
-
-// Signaling forward request
-message SignalingForwardRequest {
-  string stream_id = 1;
-  string sender_id = 2;
-  string recipient_id = 3;
-  string message_type = 4;
-  bytes payload = 5;
-}
-
-// Signaling forward response
-message SignalingForwardResponse {
-  bool success = 1;
-  string error = 2;
-}
-
-// Register client request
-message RegisterClientRequest {
-  string client_id = 1;
-  string stream_id = 2;
-  string session_id = 3;
-}
-
-// Register client response
-message RegisterClientResponse {
-  bool success = 1;
-  string error = 2;
-}
-
-// Unregister client request
-message UnregisterClientRequest {
-  string client_id = 1;
-  string stream_id = 2;
-}
-
-// Unregister client response
-message UnregisterClientResponse {
-  bool success = 1;
 }

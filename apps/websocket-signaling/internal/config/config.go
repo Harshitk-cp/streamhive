@@ -3,138 +3,199 @@ package config
 import (
 	"fmt"
 	"os"
-	"strconv"
-	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
-// Config represents the configuration for the WebSocket signaling service
+// Config represents the application configuration
 type Config struct {
-	// Service configuration
+	// Service information
 	Service struct {
-		// Name of the service
-		Name string
-		// Environment (dev, staging, prod)
-		Environment string
-		// NodeID unique identifier for this node
-		NodeID string
-	}
+		Name        string `yaml:"name"`
+		Version     string `yaml:"version"`
+		Description string `yaml:"description"`
+		Environment string `yaml:"environment"`
+	} `yaml:"service"`
 
-	// HTTP server configuration
+	// HTTP server configuration for REST API and health checks
 	HTTP struct {
-		// Address to listen on
-		Address string
-		// CORS configuration
-		CORS struct {
-			// Allowed origins
-			AllowedOrigins []string
-			// Allowed methods
-			AllowedMethods []string
-			// Allowed headers
-			AllowedHeaders []string
-		}
-	}
+		Address         string        `yaml:"address"`
+		ReadTimeout     time.Duration `yaml:"read_timeout"`
+		WriteTimeout    time.Duration `yaml:"write_timeout"`
+		ShutdownTimeout time.Duration `yaml:"shutdown_timeout"`
+	} `yaml:"http"`
+
+	// WebSocket server configuration
+	WebSocket struct {
+		Address        string        `yaml:"address"`
+		Path           string        `yaml:"path"`
+		ReadTimeout    time.Duration `yaml:"read_timeout"`
+		WriteTimeout   time.Duration `yaml:"write_timeout"`
+		PingInterval   time.Duration `yaml:"ping_interval"`
+		PongTimeout    time.Duration `yaml:"pong_timeout"`
+		MaxMessageSize int64         `yaml:"max_message_size"`
+	} `yaml:"websocket"`
 
 	// gRPC server configuration
 	GRPC struct {
 		Address              string        `yaml:"address"`
-		MaxConcurrentStreams int           `yaml:"max_concurrent_streams"`
-		ConnectionTimeout    time.Duration `yaml:"connection_timeout"`
 		KeepAliveTime        time.Duration `yaml:"keep_alive_time"`
 		KeepAliveTimeout     time.Duration `yaml:"keep_alive_timeout"`
+		MaxConcurrentStreams int           `yaml:"max_concurrent_streams"`
 	} `yaml:"grpc"`
 
-	// WebSocket configuration
-	WebSocket struct {
-		// Max message size in bytes
-		MaxMessageSize int
-		// Write wait timeout
-		WriteWait int
-		// Pong wait timeout
-		PongWait int
-		// Ping period
-		PingPeriod int
+	// WebRTC Out service address
+	WebRTCOut struct {
+		Address string `yaml:"address"`
+	} `yaml:"webrtc_out"`
+
+	// Router service address
+	Router struct {
+		Address string `yaml:"address"`
+	} `yaml:"router"`
+
+	// Logging configuration
+	Logging struct {
+		Level  string `yaml:"level"`
+		Format string `yaml:"format"`
+		Output string `yaml:"output"`
+	} `yaml:"logging"`
+}
+
+// Load loads the configuration from a file
+func Load(path string) (*Config, error) {
+	// Read the configuration file
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	// Parse the configuration
+	config := &Config{}
+	if err := yaml.Unmarshal(data, config); err != nil {
+		return nil, fmt.Errorf("failed to parse config file: %w", err)
+	}
+
+	// Apply environment overrides
+	applyEnvironmentOverrides(config)
+
+	// Set defaults
+	setDefaults(config)
+
+	return config, nil
+}
+
+// applyEnvironmentOverrides applies environment overrides
+func applyEnvironmentOverrides(config *Config) {
+	// HTTP address
+	if addr := os.Getenv("HTTP_ADDRESS"); addr != "" {
+		config.HTTP.Address = addr
+	}
+
+	// WebSocket address
+	if addr := os.Getenv("WS_ADDRESS"); addr != "" {
+		config.WebSocket.Address = addr
+	}
+
+	// gRPC address
+	if addr := os.Getenv("GRPC_ADDRESS"); addr != "" {
+		config.GRPC.Address = addr
+	}
+
+	// WebRTC Out address
+	if addr := os.Getenv("WEBRTC_OUT_ADDRESS"); addr != "" {
+		config.WebRTCOut.Address = addr
+	}
+
+	// Router address
+	if addr := os.Getenv("ROUTER_ADDRESS"); addr != "" {
+		config.Router.Address = addr
+	}
+
+	// Environment
+	if env := os.Getenv("ENVIRONMENT"); env != "" {
+		config.Service.Environment = env
 	}
 }
 
-// Load loads the configuration from environment variables
-func Load() (*Config, error) {
-	cfg := &Config{}
-
-	// Service configuration
-	cfg.Service.Name = getEnvWithDefault("SERVICE_NAME", "websocket-signaling")
-	cfg.Service.Environment = getEnvWithDefault("ENVIRONMENT", "dev")
-	cfg.Service.NodeID = getEnvWithDefault("NODE_ID", fmt.Sprintf("node-%s", generateRandomString(8)))
-
-	// HTTP server configuration
-	cfg.HTTP.Address = getEnvWithDefault("HTTP_ADDRESS", ":8080")
-
-	// CORS configuration
-	cfg.HTTP.CORS.AllowedOrigins = getEnvArrayWithDefault("CORS_ALLOWED_ORIGINS", []string{"*"})
-	cfg.HTTP.CORS.AllowedMethods = getEnvArrayWithDefault("CORS_ALLOWED_METHODS", []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"})
-	cfg.HTTP.CORS.AllowedHeaders = getEnvArrayWithDefault("CORS_ALLOWED_HEADERS", []string{"Content-Type", "Authorization"})
-
-	// gRPC server configuration
-	cfg.GRPC.Address = getEnvWithDefault("GRPC_ADDRESS", ":9090")
-
-	// WebSocket configuration
-	cfg.WebSocket.MaxMessageSize = getEnvIntWithDefault("WS_MAX_MESSAGE_SIZE", 4096)
-	cfg.WebSocket.WriteWait = getEnvIntWithDefault("WS_WRITE_WAIT", 10)
-	cfg.WebSocket.PongWait = getEnvIntWithDefault("WS_PONG_WAIT", 60)
-	cfg.WebSocket.PingPeriod = getEnvIntWithDefault("WS_PING_PERIOD", 30)
-
-	// Validate configuration
-	if err := validateConfig(cfg); err != nil {
-		return nil, err
+// setDefaults sets default values
+func setDefaults(config *Config) {
+	// Set default HTTP address
+	if config.HTTP.Address == "" {
+		config.HTTP.Address = ":8086"
 	}
 
-	return cfg, nil
-}
-
-// validateConfig validates the configuration
-func validateConfig(cfg *Config) error {
-	// Ensure NodeID is set
-	if cfg.Service.NodeID == "" {
-		return fmt.Errorf("NODE_ID is required")
+	// Set default WebSocket address and path
+	if config.WebSocket.Address == "" {
+		config.WebSocket.Address = ":8087"
+	}
+	if config.WebSocket.Path == "" {
+		config.WebSocket.Path = "/ws"
 	}
 
-	return nil
-}
-
-// Helper functions
-
-// getEnvWithDefault gets an environment variable or returns a default value
-func getEnvWithDefault(key, defaultValue string) string {
-	if value, exists := os.LookupEnv(key); exists {
-		return value
+	// Set default gRPC address
+	if config.GRPC.Address == "" {
+		config.GRPC.Address = ":50052"
 	}
-	return defaultValue
-}
 
-// getEnvArrayWithDefault gets an environment variable as an array or returns a default value
-func getEnvArrayWithDefault(key string, defaultValue []string) []string {
-	if value, exists := os.LookupEnv(key); exists {
-		return strings.Split(value, ",")
+	// Set default WebRTC Out address
+	if config.WebRTCOut.Address == "" {
+		config.WebRTCOut.Address = "webrtc-out:50053"
 	}
-	return defaultValue
-}
 
-// getEnvIntWithDefault gets an environment variable as an integer or returns a default value
-func getEnvIntWithDefault(key string, defaultValue int) int {
-	if value, exists := os.LookupEnv(key); exists {
-		if intValue, err := strconv.Atoi(value); err == nil {
-			return intValue
-		}
+	// Set default Router address
+	if config.Router.Address == "" {
+		config.Router.Address = "stream-router:9090"
 	}
-	return defaultValue
-}
 
-// generateRandomString generates a random string of the specified length
-func generateRandomString(length int) string {
-	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	result := make([]byte, length)
-	for i := range result {
-		result[i] = charset[int(os.Getpid()+i)%len(charset)]
+	// Set default HTTP timeouts
+	if config.HTTP.ReadTimeout == 0 {
+		config.HTTP.ReadTimeout = 10 * time.Second
 	}
-	return string(result)
+	if config.HTTP.WriteTimeout == 0 {
+		config.HTTP.WriteTimeout = 10 * time.Second
+	}
+	if config.HTTP.ShutdownTimeout == 0 {
+		config.HTTP.ShutdownTimeout = 5 * time.Second
+	}
+
+	// Set default WebSocket timeouts
+	if config.WebSocket.ReadTimeout == 0 {
+		config.WebSocket.ReadTimeout = 60 * time.Second
+	}
+	if config.WebSocket.WriteTimeout == 0 {
+		config.WebSocket.WriteTimeout = 10 * time.Second
+	}
+	if config.WebSocket.PingInterval == 0 {
+		config.WebSocket.PingInterval = 25 * time.Second
+	}
+	if config.WebSocket.PongTimeout == 0 {
+		config.WebSocket.PongTimeout = 60 * time.Second
+	}
+	if config.WebSocket.MaxMessageSize == 0 {
+		config.WebSocket.MaxMessageSize = 1024 * 1024 // 1MB
+	}
+
+	// Set default gRPC settings
+	if config.GRPC.KeepAliveTime == 0 {
+		config.GRPC.KeepAliveTime = 60 * time.Second
+	}
+	if config.GRPC.KeepAliveTimeout == 0 {
+		config.GRPC.KeepAliveTimeout = 20 * time.Second
+	}
+	if config.GRPC.MaxConcurrentStreams == 0 {
+		config.GRPC.MaxConcurrentStreams = 100
+	}
+
+	// Set default logging configuration
+	if config.Logging.Level == "" {
+		config.Logging.Level = "info"
+	}
+	if config.Logging.Format == "" {
+		config.Logging.Format = "json"
+	}
+	if config.Logging.Output == "" {
+		config.Logging.Output = "stdout"
+	}
 }

@@ -1,102 +1,171 @@
 package handler
 
 import (
-	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"time"
 
-	"github.com/Harshitk-cp/streamhive/apps/webrtc-out/internal/config"
-	"github.com/Harshitk-cp/streamhive/apps/webrtc-out/internal/metrics"
+	"github.com/Harshitk-cp/streamhive/apps/webrtc-out/internal/service"
 )
 
-// HealthResponse represents the health check response
-type HealthResponse struct {
-	Status    string    `json:"status"`
-	Timestamp time.Time `json:"timestamp"`
-	Version   string    `json:"version"`
-	NodeID    string    `json:"node_id"`
-	Uptime    string    `json:"uptime"`
+// HTTPHandler handles HTTP requests
+type HTTPHandler struct {
+	webrtcService *service.WebRTCService
+	mux           *http.ServeMux
 }
 
-// HTTPServer represents the HTTP server
-type HTTPServer struct {
-	config           *config.Config
-	metricsCollector metrics.Collector
-	server           *http.Server
-	startTime        time.Time
-}
-
-// NewHTTPServer creates a new HTTP server
-func NewHTTPServer(cfg *config.Config, m metrics.Collector) *HTTPServer {
-	return &HTTPServer{
-		config:           cfg,
-		metricsCollector: m,
-		startTime:        time.Now(),
-	}
-}
-
-// Start starts the HTTP server
-func (s *HTTPServer) Start() error {
-	// Create router
-	mux := http.NewServeMux()
-
-	// Register health check endpoint
-	mux.HandleFunc("/health", s.healthHandler)
-
-	// Register ready check endpoint
-	mux.HandleFunc("/ready", s.readyHandler)
-
-	// Register metrics endpoint
-	if s.config.Metrics.Enabled {
-		mux.Handle(s.config.Metrics.Path, s.metricsCollector.Handler())
+// NewHTTPHandler creates a new HTTP handler
+func NewHTTPHandler(webrtcService *service.WebRTCService) http.Handler {
+	h := &HTTPHandler{
+		webrtcService: webrtcService,
+		mux:           http.NewServeMux(),
 	}
 
-	// Create server
-	s.server = &http.Server{
-		Addr:         s.config.HTTP.Address,
-		Handler:      mux,
-		ReadTimeout:  s.config.HTTP.ReadTimeout,
-		WriteTimeout: s.config.HTTP.WriteTimeout,
-	}
+	// Register routes
+	h.mux.HandleFunc("/health", h.healthHandler)
+	h.mux.HandleFunc("/ready", h.readyHandler)
+	h.mux.HandleFunc("/metrics", h.metricsHandler)
+	h.mux.HandleFunc("/streams", h.listStreamsHandler)
+	h.mux.HandleFunc("/streams/", h.streamHandler)
 
-	// Start server
-	log.Printf("Starting HTTP server on %s", s.config.HTTP.Address)
-	return s.server.ListenAndServe()
+	return h
 }
 
-// Stop stops the HTTP server
-func (s *HTTPServer) Stop() error {
-	ctx, cancel := context.WithTimeout(context.Background(), s.config.HTTP.ShutdownTimeout)
-	defer cancel()
-	return s.server.Shutdown(ctx)
+// ServeHTTP implements the http.Handler interface
+func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.mux.ServeHTTP(w, r)
 }
 
 // healthHandler handles health check requests
-func (s *HTTPServer) healthHandler(w http.ResponseWriter, r *http.Request) {
-	resp := HealthResponse{
-		Status:    "UP",
-		Timestamp: time.Now(),
-		Version:   s.config.Service.Version,
-		NodeID:    s.config.Service.NodeID,
-		Uptime:    time.Since(s.startTime).String(),
+func (h *HTTPHandler) healthHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	response := map[string]interface{}{
+		"status":    "ok",
+		"timestamp": time.Now().Unix(),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("Error encoding health response: %v", err)
+	}
 }
 
 // readyHandler handles readiness check requests
-func (s *HTTPServer) readyHandler(w http.ResponseWriter, r *http.Request) {
-	// TODO: Add actual readiness check logic
+func (h *HTTPHandler) readyHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 
-	resp := map[string]string{
-		"status": "READY",
+	response := map[string]interface{}{
+		"status":    "ready",
+		"timestamp": time.Now().Unix(),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("Error encoding ready response: %v", err)
+	}
+}
+
+// metricsHandler handles metrics requests
+func (h *HTTPHandler) metricsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Get metrics from WebRTC service
+	// TODO: Implement metrics
+
+	response := map[string]interface{}{
+		"timestamp": time.Now().Unix(),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("Error encoding metrics response: %v", err)
+	}
+}
+
+// listStreamsHandler lists all active streams
+func (h *HTTPHandler) listStreamsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// TODO: Implement stream listing
+	streams := []string{}
+
+	response := map[string]interface{}{
+		"streams": streams,
+		"count":   len(streams),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("Error encoding streams response: %v", err)
+	}
+}
+
+// streamHandler handles requests for a specific stream
+func (h *HTTPHandler) streamHandler(w http.ResponseWriter, r *http.Request) {
+	// Extract stream ID from path
+	streamID := r.URL.Path[len("/streams/"):]
+	if streamID == "" {
+		http.Error(w, "Stream ID is required", http.StatusBadRequest)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		// Get stream info
+		stream, err := h.webrtcService.GetStream(streamID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+
+		// Create response
+		response := map[string]interface{}{
+			"stream_id":       stream.ID,
+			"status":          stream.Status,
+			"created_at":      stream.CreatedAt.Unix(),
+			"current_viewers": stream.CurrentViewers,
+			"total_viewers":   stream.TotalViewers,
+			"resolution":      fmt.Sprintf("%dx%d", stream.Width, stream.Height),
+			"frame_rate":      stream.FrameRate,
+			"total_frames":    stream.TotalFrames,
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			log.Printf("Error encoding stream response: %v", err)
+		}
+
+	case http.MethodDelete:
+		// Remove stream
+		err := h.webrtcService.RemoveStream(streamID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
 }

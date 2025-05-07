@@ -6,9 +6,9 @@ services:
       context: .
       dockerfile: apps/api-gateway/Dockerfile
     ports:
-      - "8080:8080"   # HTTP API port
-      - "50051:50051" # gRPC port
-      - "8082:8082"   # WebSocket port
+      - "8080:8080"  # HTTP API port
+      - "50051:50051"  # gRPC port
+      - "8082:8082"  # WebSocket port
     environment:
       - CONFIG_PATH=/app/config/config.yaml
       - GIN_MODE=release
@@ -22,8 +22,8 @@ services:
     depends_on:
       - stream-router
       - rtmp-ingestor
-    networks:
-      - streamhive-network
+      - websocket-signaling
+      - webrtc-out
 
   stream-router:
     build:
@@ -42,8 +42,6 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-    networks:
-      - streamhive-network
 
   rtmp-ingestor:
     build:
@@ -62,8 +60,6 @@ services:
     depends_on:
       - stream-router
       - frame-splitter
-    networks:
-      - streamhive-network
 
   frame-splitter:
     build:
@@ -81,88 +77,55 @@ services:
       - ROUTER_ADDRESS=stream-router:9090
     depends_on:
       - stream-router
-    networks:
-      - streamhive-network
-
-  # Optional: Enhancement service for AI processing (can be enabled later)
-  # enhancement-service:
-  #   build:
-  #     context: .
-  #     dockerfile: apps/enhancement-service/Dockerfile
-  #   ports:
-  #     - "8087:8087"  # HTTP port
-  #     - "9093:9093"  # gRPC port
-  #   volumes:
-  #     - ./apps/enhancement-service/config:/app/config
-  #   environment:
-  #     - HTTP_ADDRESS=:8087
-  #     - GRPC_ADDRESS=:9093
-  #   networks:
-  #     - streamhive-network
-
-  webrtc-out:
-    build:
-      context: .
-      dockerfile: apps/webrtc-out/Dockerfile
-    ports:
-      - "8085:8085"  # HTTP port
-      - "9094:9094"  # gRPC port
-    volumes:
-      - ./apps/webrtc-out/config:/src/config
-    environment:
-      - HTTP_ADDRESS=:8085
-      - GRPC_ADDRESS=:9094
-      - SIGNALING_SERVICE=websocket-signaling:9095
-      - NODE_ID=webrtc-out-1
-    depends_on:
-      - websocket-signaling
-    networks:
-      - streamhive-network
 
   websocket-signaling:
     build:
       context: .
       dockerfile: apps/websocket-signaling/Dockerfile
     ports:
-      - "8086:8086"  # WebSocket port
-      - "9095:9095"  # gRPC port
+      - "8086:8086"  # HTTP port
+      - "8087:8087"  # WebSocket port
+      - "50052:50052"  # gRPC port
     volumes:
-      - ./apps/websocket-signaling/config:/src/config
+      - ./apps/websocket-signaling/config:/app/config
     environment:
       - HTTP_ADDRESS=:8086
-      - GRPC_ADDRESS=:9095
-      - NODE_ID=websocket-signaling-1
-    networks:
-      - streamhive-network
-
-  # Monitoring stack
-  prometheus:
-    image: prom/prometheus:latest
-    volumes:
-      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
-      - prometheus-data:/prometheus
-    ports:
-      - "9090:9090"
-    networks:
-      - streamhive-network
-
-  grafana:
-    image: grafana/grafana:latest
-    volumes:
-      - grafana-data:/var/lib/grafana
-      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
-    ports:
-      - "3000:3000"
+      - WS_ADDRESS=:8087
+      - GRPC_ADDRESS=:50052
+      - WEBRTC_OUT_ADDRESS=webrtc-out:50053
+      - ROUTER_ADDRESS=stream-router:9090
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8086/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
     depends_on:
-      - prometheus
-    networks:
-      - streamhive-network
+      - stream-router
 
-networks:
-  streamhive-network:
-    driver: bridge
+  webrtc-out:
+    build:
+      context: .
+      dockerfile: apps/webrtc-out/Dockerfile
+    ports:
+      - "8088:8088"  # HTTP port
+      - "50053:50053"  # gRPC port
+    volumes:
+      - ./apps/webrtc-out/config:/app/config
+    environment:
+      - HTTP_ADDRESS=:8088
+      - GRPC_ADDRESS=:50053
+      - FRAME_SPLITTER_ADDRESS=frame-splitter:9091
+      - SIGNALING_ADDRESS=websocket-signaling:50052
+      - ROUTER_ADDRESS=stream-router:9090
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8088/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      - stream-router
+      - frame-splitter
+      - websocket-signaling
 
 volumes:
   frame-data:
-  prometheus-data:
-  grafana-data:

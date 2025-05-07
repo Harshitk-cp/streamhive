@@ -198,8 +198,8 @@ func (p *BackupProcessor) processFrame(frame model.Frame) {
 	p.metrics.FrameBackedUp(frame.StreamID, string(frame.Type), len(data), backupTime)
 
 	// Log backup
-	log.Printf("Backed up frame %s for stream %s to %s (%d bytes, %v)",
-		frame.FrameID, frame.StreamID, filePath, len(data), backupTime)
+	// log.Printf("Backed up frame %s for stream %s to %s (%d bytes, %v)",
+	// 	frame.FrameID, frame.StreamID, filePath, len(data), backupTime)
 }
 
 // performCleanup removes old frame backups

@@ -3,18 +3,19 @@ package transport
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/Harshitk-cp/streamhive/apps/frame-splitter/internal/model"
-	webrtcPb "github.com/Harshitk-cp/streamhive/libs/proto/webrtc"
+	"github.com/Harshitk-cp/streamhive/libs/proto/webrtc"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // WebRTCClient represents a client for the WebRTC service
 type WebRTCClient struct {
 	*BaseClient
-	client webrtcPb.WebRTCServiceClient
+	client webrtc.WebRTCServiceClient
 }
 
 // NewWebRTCClient creates a new WebRTC client
@@ -26,63 +27,52 @@ func NewWebRTCClient(address string) (*WebRTCClient, error) {
 
 	return &WebRTCClient{
 		BaseClient: baseClient,
-		client:     webrtcPb.NewWebRTCServiceClient(baseClient.GetConnection()),
+		client:     webrtc.NewWebRTCServiceClient(baseClient.GetConnection()),
 	}, nil
 }
 
 // Send sends a batch of frames to the WebRTC service
-// Add to apps/frame-splitter/internal/transport/webrtc.go
 func (c *WebRTCClient) Send(ctx context.Context, batch model.FrameBatch) error {
-	// Group frames by type
-	videoFrames := make([]model.Frame, 0)
-	audioFrames := make([]model.Frame, 0)
+	// Process all frames
+	wg := sync.WaitGroup{}
+	errors := make(chan error, len(batch.Frames))
+
+	log.Printf("Frame Splitter: Sending frame batch to WebRTC out: stream=%s, frames=%d",
+		batch.StreamID, len(batch.Frames))
 
 	for _, frame := range batch.Frames {
-		switch frame.Type {
-		case model.FrameTypeVideo:
-			videoFrames = append(videoFrames, frame)
-		case model.FrameTypeAudio:
-			audioFrames = append(audioFrames, frame)
-		}
-	}
-
-	// Process video frames
-	wg := sync.WaitGroup{}
-	errors := make(chan error, len(videoFrames)+len(audioFrames))
-
-	// Send video frames
-	for _, frame := range videoFrames {
 		wg.Add(1)
 		go func(f model.Frame) {
 			defer wg.Done()
-			req := &webrtcPb.AddVideoFrameRequest{
+
+			// Determine frame type
+			var frameType webrtc.FrameType
+			switch f.Type {
+			case model.FrameTypeVideo:
+				frameType = webrtc.FrameType_VIDEO
+			case model.FrameTypeAudio:
+				frameType = webrtc.FrameType_AUDIO
+			case model.FrameTypeMetadata:
+				frameType = webrtc.FrameType_METADATA
+			default:
+				frameType = webrtc.FrameType_UNKNOWN
+			}
+
+			// Create frame request
+			req := &webrtc.PushFrameRequest{
 				StreamId:   f.StreamID,
-				FrameData:  f.Data,
+				FrameId:    f.FrameID,
+				Type:       frameType,
+				Data:       f.Data,
+				Timestamp:  timestamppb.New(f.Timestamp),
 				IsKeyFrame: f.IsKeyFrame,
-				Timestamp:  f.Timestamp.UnixNano() / int64(time.Millisecond),
+				Sequence:   f.Sequence,
+				Metadata:   f.Metadata,
 			}
 
-			_, err := c.client.AddVideoFrame(ctx, req)
+			_, err := c.client.PushFrame(ctx, req)
 			if err != nil {
-				errors <- fmt.Errorf("failed to send video frame: %w", err)
-			}
-		}(frame)
-	}
-
-	// Send audio frames
-	for _, frame := range audioFrames {
-		wg.Add(1)
-		go func(f model.Frame) {
-			defer wg.Done()
-			req := &webrtcPb.AddAudioFrameRequest{
-				StreamId:  f.StreamID,
-				FrameData: f.Data,
-				Timestamp: f.Timestamp.UnixNano() / int64(time.Millisecond),
-			}
-
-			_, err := c.client.AddAudioFrame(ctx, req)
-			if err != nil {
-				errors <- fmt.Errorf("failed to send audio frame: %w", err)
+				errors <- fmt.Errorf("failed to send frame to WebRTC: %w", err)
 			}
 		}(frame)
 	}
