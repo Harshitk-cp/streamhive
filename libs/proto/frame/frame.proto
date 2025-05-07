@@ -1,12 +1,32 @@
+// libs/proto/frame/frame.proto
 syntax = "proto3";
 
 package frame;
 
 import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
 
 option go_package = "libs/proto/frame";
 
-// Frame type enumeration
+// FrameSplitterService handles frame processing and distribution
+service FrameSplitterService {
+  // ProcessFrame processes a single frame
+  rpc ProcessFrame(Frame) returns (ProcessFrameResponse);
+
+  // ProcessFrameBatch processes a batch of frames
+  rpc ProcessFrameBatch(ProcessFrameBatchRequest) returns (ProcessFrameBatchResponse);
+
+  // SubscribeToStream subscribes to a stream and receives frames
+  rpc SubscribeToStream(SubscribeToStreamRequest) returns (stream Frame);
+
+  // RegisterConsumer registers a consumer service
+  rpc RegisterConsumer(RegisterConsumerRequest) returns (RegisterConsumerResponse);
+
+  // ListStreams lists all active streams
+  rpc ListStreams(google.protobuf.Empty) returns (ListStreamsResponse);
+}
+
+// FrameType represents the type of a frame
 enum FrameType {
   UNKNOWN = 0;
   VIDEO = 1;
@@ -14,7 +34,7 @@ enum FrameType {
   METADATA = 3;
 }
 
-// Frame represents a video or audio frame
+// Frame represents a media frame
 message Frame {
   string stream_id = 1;
   string frame_id = 2;
@@ -24,105 +44,57 @@ message Frame {
   map<string, string> metadata = 6;
   int64 sequence = 7;
   bool is_key_frame = 8;
-  int32 duration = 9; // Duration in milliseconds
 }
 
-// ProcessFrameRequest is used to process a single frame
-message ProcessFrameRequest {
-  Frame frame = 1;
-}
-
-// ProcessFrameResponse contains the result of processing a frame
+// ProcessFrameResponse is the response to a ProcessFrame request
 message ProcessFrameResponse {
   string frame_id = 1;
   string status = 2;
-  string error = 3;
-  repeated string destinations = 4;
-  map<string, string> metadata = 5;
 }
 
-// ProcessFrameBatchRequest is used to process a batch of frames
+// ProcessFrameBatchRequest is a request to process a batch of frames
 message ProcessFrameBatchRequest {
   string stream_id = 1;
   repeated Frame frames = 2;
 }
 
-// ProcessFrameBatchResponse contains the results of processing a batch of frames
+// ProcessFrameBatchResponse is the response to a ProcessFrameBatch request
 message ProcessFrameBatchResponse {
-  repeated ProcessFrameResponse results = 1;
-}
-
-// RoutingRule represents a routing rule for frames
-message RoutingRule {
-  string destination = 1;
-  string filter = 2;
-  int32 priority = 3;
-  bool enabled = 4;
-  int32 batch_size = 5;
-}
-
-// StreamConfig represents the configuration for a stream
-message StreamConfig {
-  string stream_id = 1;
-  repeated RoutingRule routing_rules = 2;
-  bool backup_enabled = 3;
-  string storage_path = 4;
-  int64 retention_time = 5; // In seconds
-}
-
-// GetStreamConfigRequest is used to get the configuration for a stream
-message GetStreamConfigRequest {
-  string stream_id = 1;
-}
-
-// UpdateStreamConfigResponse contains the response to updating a stream configuration
-message UpdateStreamConfigResponse {
   string status = 1;
+  int32 processed_count = 2;
 }
 
-// GetStreamStatsRequest is used to get statistics for a stream
-message GetStreamStatsRequest {
+// SubscribeToStreamRequest is a request to subscribe to a stream
+message SubscribeToStreamRequest {
   string stream_id = 1;
+  string consumer_id = 2;
+  bool include_video = 3;
+  bool include_audio = 4;
+  bool include_metadata = 5;
 }
 
-// StreamStats represents statistics for a stream
-message StreamStats {
+// RegisterConsumerRequest is a request to register a consumer
+message RegisterConsumerRequest {
+  string consumer_id = 1;
+  string consumer_type = 2;
+  repeated string capabilities = 3;
+}
+
+// RegisterConsumerResponse is the response to a RegisterConsumer request
+message RegisterConsumerResponse {
+  string consumer_id = 1;
+  string status = 2;
+}
+
+// ListStreamsResponse is the response to a ListStreams request
+message ListStreamsResponse {
+  repeated StreamInfo streams = 1;
+}
+
+// StreamInfo contains information about a stream
+message StreamInfo {
   string stream_id = 1;
-  int64 frames_processed = 2;
-  int64 bytes_processed = 3;
-  int64 frames_dropped = 4;
-  double avg_processing_time = 5; // In milliseconds
-  google.protobuf.Timestamp last_processed_at = 6;
-  google.protobuf.Timestamp last_key_frame_at = 7;
-  double video_frame_rate = 8;
-  double audio_frame_rate = 9;
-  int64 video_bitrate = 10;
-  int64 audio_bitrate = 11;
-}
-
-// Add the request message:
-message RestoreFrameRequest {
-  string stream_id = 1;
-  string frame_id = 2;
-}
-
-// FrameSplitterService handles frame splitting and routing
-service FrameSplitterService {
-  // Process a single frame
-  rpc ProcessFrame(ProcessFrameRequest) returns (ProcessFrameResponse);
-
-  // Process a batch of frames
-  rpc ProcessFrameBatch(ProcessFrameBatchRequest) returns (ProcessFrameBatchResponse);
-
-  // Get the configuration for a stream
-  rpc GetStreamConfig(GetStreamConfigRequest) returns (StreamConfig);
-
-  // Update the configuration for a stream
-  rpc UpdateStreamConfig(StreamConfig) returns (UpdateStreamConfigResponse);
-
-  // Get statistics for a stream
-  rpc GetStreamStats(GetStreamStatsRequest) returns (StreamStats);
-
-  // Restore a frame from backup
-  rpc RestoreFrame(RestoreFrameRequest) returns (Frame);
+  string status = 2;
+  google.protobuf.Timestamp created_at = 3;
+  google.protobuf.Timestamp last_activity = 4;
 }

@@ -3,6 +3,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"sync"
@@ -10,18 +11,22 @@ import (
 
 	"github.com/Harshitk-cp/streamhive/apps/websocket-signaling/internal/config"
 	"github.com/Harshitk-cp/streamhive/apps/websocket-signaling/internal/model"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+
+	webrtcpb "github.com/Harshitk-cp/streamhive/libs/proto/webrtc"
 )
 
 // SignalingService handles WebRTC signaling
 type SignalingService struct {
-	cfg               *config.Config
-	streams           map[string]*StreamSession
-	clients           map[string]*ClientSession
-	streamsMutex      sync.RWMutex
-	clientsMutex      sync.RWMutex
-	messageChannel    chan model.SignalingMessage
-	cleanupTicker     *time.Ticker
-	stopChan          chan struct{}
+	cfg            *config.Config
+	streams        map[string]*StreamSession
+	clients        map[string]*ClientSession
+	streamsMutex   sync.RWMutex
+	clientsMutex   sync.RWMutex
+	messageChannel chan model.SignalingMessage
+	cleanupTicker  *time.Ticker
+	stopChan       chan struct{}
 }
 
 // StreamSession represents an active stream session
@@ -277,29 +282,128 @@ func (s *SignalingService) routeMessage(msg model.SignalingMessage) {
 
 // handleOffer handles SDP offer messages
 func (s *SignalingService) handleOffer(msg model.SignalingMessage) {
-	// In a real implementation, this would validate the offer and forward to WebRTC Out
 	log.Printf("Received offer from %s for stream %s", msg.SenderID, msg.StreamID)
 
-	// Forward to WebRTC Out (in a real implementation)
-	// For now, just echo back an answer
+	// Parse the offer SDP
+	var offerSDP string
+
+	// Try parsing as JSON object first
+	var offerData map[string]interface{}
+	err := json.Unmarshal(msg.Payload, &offerData)
+	if err == nil {
+		// Successfully parsed as JSON object
+		sdp, ok := offerData["sdp"].(string)
+		if !ok {
+			log.Printf("Invalid offer format: missing sdp field")
+			s.sendErrorResponse(msg.SenderID, msg.StreamID, "invalid_offer", "Offer is missing SDP field")
+			return
+		}
+		offerSDP = sdp
+	} else {
+		// Try parsing as a direct string
+		err = json.Unmarshal(msg.Payload, &offerSDP)
+		if err != nil {
+			log.Printf("Error parsing offer: %v", err)
+			s.sendErrorResponse(msg.SenderID, msg.StreamID, "invalid_offer", "Could not parse offer payload")
+			return
+		}
+	}
+
+	// Connect to WebRTC-out service via gRPC
+	conn, err := grpc.Dial(s.cfg.WebRTCOut.Address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		log.Printf("Failed to connect to WebRTC-out service: %v", err)
+		s.sendErrorResponse(msg.SenderID, msg.StreamID, "service_unavailable", "WebRTC service is currently unavailable")
+		return
+	}
+	defer conn.Close()
+
+	// Create WebRTC client
+	webrtcClient := webrtcpb.NewWebRTCServiceClient(conn)
+
+	// Forward offer to WebRTC-out service - IMPORTANT: pass the SDP as a plain string, not JSON
+	req := &webrtcpb.OfferRequest{
+		StreamId: msg.StreamID,
+		ViewerId: msg.SenderID,
+		Offer:    offerSDP, // No JSON.stringify here
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	resp, err := webrtcClient.HandleOffer(ctx, req)
+	if err != nil {
+		log.Printf("Failed to handle offer: %v", err)
+		s.sendErrorResponse(msg.SenderID, msg.StreamID, "offer_rejected", "Could not process your connection request")
+		return
+	}
+
+	// Send answer back to client
+	answerPayload, err := json.Marshal(map[string]string{
+		"sdp": resp.Answer,
+	})
+	if err != nil {
+		log.Printf("Failed to marshal answer: %v", err)
+		s.sendErrorResponse(msg.SenderID, msg.StreamID, "internal_error", "Internal server error")
+		return
+	}
+
 	answer := model.SignalingMessage{
 		Type:        "answer",
 		StreamID:    msg.StreamID,
 		SenderID:    "server",
 		RecipientID: msg.SenderID,
-		Payload:     msg.Payload, // In a real impl, this would be the SDP answer from WebRTC Out
+		Payload:     answerPayload,
 	}
 
 	s.clientsMutex.RLock()
-	client, exists := s.clients[msg.SenderID]
+	clientSession, exists := s.clients[msg.SenderID]
 	s.clientsMutex.RUnlock()
 
-	if exists && client.Connected {
+	if exists && clientSession.Connected {
 		select {
-		case client.SendChannel <- answer:
+		case clientSession.SendChannel <- answer:
 			log.Printf("Sent answer to %s", msg.SenderID)
 		default:
 			log.Printf("Failed to send answer to %s: channel full or closed", msg.SenderID)
+		}
+	}
+}
+
+// sendErrorResponse sends an error response to a client
+func (s *SignalingService) sendErrorResponse(clientID, streamID, errorCode, errorMessage string) {
+	// Create a properly structured error object
+	errorData := struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}{
+		Code:    errorCode,
+		Message: errorMessage,
+	}
+
+	errorPayload, err := json.Marshal(errorData)
+	if err != nil {
+		log.Printf("Failed to marshal error response: %v", err)
+		return
+	}
+
+	errorMsg := model.SignalingMessage{
+		Type:        "error",
+		StreamID:    streamID,
+		SenderID:    "server",
+		RecipientID: clientID,
+		Payload:     errorPayload,
+	}
+
+	s.clientsMutex.RLock()
+	clientSession, exists := s.clients[clientID]
+	s.clientsMutex.RUnlock()
+
+	if exists && clientSession.Connected {
+		select {
+		case clientSession.SendChannel <- errorMsg:
+			log.Printf("Sent error response to %s: %s", clientID, errorMessage)
+		default:
+			log.Printf("Failed to send error response to %s: channel full or closed", clientID)
 		}
 	}
 }

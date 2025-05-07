@@ -4,7 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"time"
 
+	"github.com/Harshitk-cp/streamhive/apps/webrtc-out/internal/model"
 	"github.com/Harshitk-cp/streamhive/apps/webrtc-out/internal/service"
 	webrtcpb "github.com/Harshitk-cp/streamhive/libs/proto/webrtc"
 	"github.com/pion/webrtc/v3"
@@ -28,37 +33,38 @@ func NewGRPCHandler(webrtcService *service.WebRTCService) *GRPCHandler {
 
 // HandleOffer handles an SDP offer from a viewer
 func (h *GRPCHandler) HandleOffer(ctx context.Context, req *webrtcpb.OfferRequest) (*webrtcpb.AnswerResponse, error) {
-	// Validate request
-	if req.StreamId == "" {
-		return nil, status.Error(codes.InvalidArgument, "stream ID is required")
-	}
-	if req.ViewerId == "" {
-		return nil, status.Error(codes.InvalidArgument, "viewer ID is required")
-	}
-	if req.Offer == "" {
-		return nil, status.Error(codes.InvalidArgument, "SDP offer is required")
+	log.Printf("Received offer request for stream %s from viewer %s", req.StreamId, req.ViewerId)
+
+	// Check for JSON formatting in the SDP (if it's wrapped in quotes or has escaped characters)
+	offerSDP := req.Offer
+
+	// If the SDP starts with a quote, it might be a JSON string that needs to be unescaped
+	if strings.HasPrefix(offerSDP, "\"") && strings.HasSuffix(offerSDP, "\"") {
+		// Remove the surrounding quotes
+		offerSDP = offerSDP[1 : len(offerSDP)-1]
+		// Unescape any JSON escape sequences
+		unescaped, err := strconv.Unquote("\"" + offerSDP + "\"")
+		if err == nil {
+			offerSDP = unescaped
+		}
 	}
 
-	// Create offer
+	// Create SDP offer
 	offer := webrtc.SessionDescription{
 		Type: webrtc.SDPTypeOffer,
-		SDP:  req.Offer,
+		SDP:  offerSDP,
 	}
 
-	// Handle offer
+	// Process the offer
 	answer, err := h.webrtcService.HandleOffer(req.StreamId, req.ViewerId, offer)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to handle offer: %v", err)
+		return nil, fmt.Errorf("failed to handle offer: %w", err)
 	}
 
-	// Create response
-	response := &webrtcpb.AnswerResponse{
-		StreamId: req.StreamId,
-		ViewerId: req.ViewerId,
-		Answer:   answer.SDP,
-	}
-
-	return response, nil
+	// Return response
+	return &webrtcpb.AnswerResponse{
+		Answer: answer.SDP,
+	}, nil
 }
 
 // HandleICECandidate handles an ICE candidate from a viewer
@@ -73,9 +79,12 @@ func (h *GRPCHandler) HandleICECandidate(ctx context.Context, req *webrtcpb.ICEC
 
 	// Create ICE candidate
 	candidate := webrtc.ICECandidateInit{
-		Candidate:     req.Candidate,
-		SDPMid:        req.SdpMid,
-		SDPMLineIndex: req.SdpMLineIndex,
+		Candidate: req.Candidate,
+		SDPMid:    &req.SdpMid,
+		SDPMLineIndex: func(v uint32) *uint16 {
+			val := uint16(v)
+			return &val
+		}(req.SdpMlineIndex),
 	}
 
 	// Handle ICE candidate
@@ -132,4 +141,56 @@ func (h *GRPCHandler) RemoveStream(ctx context.Context, req *webrtcpb.RemoveStre
 	}
 
 	return &emptypb.Empty{}, nil
+}
+
+// PushFrame pushes a frame to a stream
+func (h *GRPCHandler) PushFrame(ctx context.Context, req *webrtcpb.PushFrameRequest) (*webrtcpb.PushFrameResponse, error) {
+	// Validate request
+	if req.StreamId == "" {
+		return nil, status.Error(codes.InvalidArgument, "stream_id is required")
+	}
+	if len(req.Data) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "frame data is required")
+	}
+
+	// Convert frame type
+	var frameType model.FrameType
+	switch req.Type {
+	case webrtcpb.FrameType_VIDEO:
+		frameType = model.FrameTypeVideo
+	case webrtcpb.FrameType_AUDIO:
+		frameType = model.FrameTypeAudio
+	case webrtcpb.FrameType_METADATA:
+		frameType = model.FrameTypeMetadata
+	default:
+		frameType = model.FrameTypeVideo // Default to video
+	}
+
+	// Convert timestamp
+	timestamp := time.Now()
+	if req.Timestamp != nil {
+		timestamp = req.Timestamp.AsTime()
+	}
+
+	// Create frame
+	frame := &model.Frame{
+		StreamID:   req.StreamId,
+		FrameID:    req.FrameId,
+		Type:       frameType,
+		Data:       req.Data,
+		Timestamp:  timestamp,
+		IsKeyFrame: req.IsKeyFrame,
+		Sequence:   req.Sequence,
+		Metadata:   req.Metadata,
+	}
+
+	// Push frame to WebRTC service
+	err := h.webrtcService.PushFrame(frame)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to push frame: %v", err)
+	}
+
+	return &webrtcpb.PushFrameResponse{
+		Status: "success",
+	}, nil
 }

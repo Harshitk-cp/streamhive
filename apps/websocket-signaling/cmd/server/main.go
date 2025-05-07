@@ -1,4 +1,3 @@
-// apps/websocket-signaling/cmd/server/main.go
 package main
 
 import (
@@ -10,7 +9,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/Harshitk-cp/streamhive/apps/websocket-signaling/internal/config"
 	"github.com/Harshitk-cp/streamhive/apps/websocket-signaling/internal/handler"
@@ -40,11 +38,15 @@ func main() {
 	// Initialize signaling service
 	signalingService := service.NewSignalingService(cfg)
 
-	// Initialize HTTP router
+	// Initialize HTTP handler
 	httpHandler := handler.NewHTTPHandler(signalingService)
 
 	// Initialize WebSocket handler
 	wsHandler := handler.NewWebSocketHandler(signalingService)
+
+	// Create router for WebSocket
+	wsRouter := http.NewServeMux()
+	wsRouter.Handle(cfg.WebSocket.Path, wsHandler)
 
 	// Initialize HTTP server for REST API and health checks
 	httpServer := &http.Server{
@@ -57,7 +59,7 @@ func main() {
 	// Initialize WebSocket server
 	wsServer := &http.Server{
 		Addr:         cfg.WebSocket.Address,
-		Handler:      wsHandler,
+		Handler:      wsRouter,
 		ReadTimeout:  cfg.WebSocket.ReadTimeout,
 		WriteTimeout: cfg.WebSocket.WriteTimeout,
 	}

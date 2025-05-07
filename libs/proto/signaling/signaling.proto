@@ -2,45 +2,61 @@ syntax = "proto3";
 
 package signaling;
 
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
 option go_package = "libs/proto/signaling";
 
-message SignalRequest {
-  string session_id = 1;
-  string payload = 2;
-}
-
-message SignalResponse {
-  string status = 1;
-}
-
-message WebRTCConnectRequest {
-  string stream_id = 1;
-  string user_id = 2;
-  repeated string capabilities = 3;
-}
-
-message ICEServer {
-  repeated string urls = 1;
-  string username = 2;
-  string credential = 3;
-}
-
-message WebRTCConnectResponse {
-  string session_id = 1;
-  string status = 2;
-  repeated ICEServer ice_servers = 3;
-}
-
-message WebRTCDisconnectRequest {
-  string session_id = 1;
-}
-
-message WebRTCDisconnectResponse {
-  string status = 1;
-}
-
+// SignalingService handles WebRTC signaling
 service SignalingService {
-  rpc SendSignal(SignalRequest) returns (SignalResponse);
-  rpc WebRTCConnect(WebRTCConnectRequest) returns (WebRTCConnectResponse);
-  rpc WebRTCDisconnect(WebRTCDisconnectRequest) returns (WebRTCDisconnectResponse);
+  // SendSignalingMessage sends a signaling message
+  rpc SendSignalingMessage(SignalingMessage) returns (google.protobuf.Empty);
+
+  // GetStreamInfo gets information about a stream
+  rpc GetStreamInfo(GetStreamInfoRequest) returns (StreamInfo);
+
+  // NotifyStreamEnded notifies clients that a stream has ended
+  rpc NotifyStreamEnded(NotifyStreamEndedRequest) returns (google.protobuf.Empty);
+
+  // GetStats gets statistics about the signaling service
+  rpc GetStats(google.protobuf.Empty) returns (SignalingStats);
+
+  // StreamSignaling establishes a bidirectional signaling stream
+  rpc StreamSignaling(stream SignalingMessage) returns (stream SignalingMessage);
+}
+
+// SignalingMessage represents a WebRTC signaling message
+message SignalingMessage {
+  string type = 1;
+  string stream_id = 2;
+  string sender_id = 3;
+  string recipient_id = 4;
+  string payload = 5;
+  int64 timestamp = 6;
+}
+
+// GetStreamInfoRequest is a request to get information about a stream
+message GetStreamInfoRequest {
+  string stream_id = 1;
+}
+
+// StreamInfo contains information about a stream
+message StreamInfo {
+  string stream_id = 1;
+  int32 client_count = 2;
+  bool active = 3;
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp updated_at = 5;
+}
+
+// NotifyStreamEndedRequest is a request to notify clients that a stream has ended
+message NotifyStreamEndedRequest {
+  string stream_id = 1;
+  string reason = 2;
+}
+
+// SignalingStats contains statistics about the signaling service
+message SignalingStats {
+  int32 connected_clients = 1;
+  google.protobuf.Timestamp timestamp = 2;
 }
