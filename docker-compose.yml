@@ -1,5 +1,9 @@
 version: '3.8'
 
+networks:
+  streamhive-network:
+    driver: bridge
+
 services:
   api-gateway:
     build:
@@ -24,6 +28,8 @@ services:
       - rtmp-ingestor
       - websocket-signaling
       - webrtc-out
+    networks:
+      - streamhive-network
 
   stream-router:
     build:
@@ -33,7 +39,7 @@ services:
       - "8081:8081"  # HTTP port
       - "9090:9090"  # gRPC port
     volumes:
-      - ./apps/stream-router/config:/src/config
+      - ./apps/stream-router/config:/app/config
     environment:
       - HTTP_ADDRESS=:8081
       - GRPC_ADDRESS=:9090
@@ -42,6 +48,8 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+    networks:
+      - streamhive-network
 
   rtmp-ingestor:
     build:
@@ -51,7 +59,7 @@ services:
       - "8083:8081"  # HTTP port
       - "1935:1935"  # RTMP port
     volumes:
-      - ./apps/rtmp-ingestor/config:/src/config
+      - ./apps/rtmp-ingestor/config:/app/config
     environment:
       - HTTP_ADDRESS=:8081
       - RTMP_ADDRESS=:1935
@@ -60,6 +68,8 @@ services:
     depends_on:
       - stream-router
       - frame-splitter
+    networks:
+      - streamhive-network
 
   frame-splitter:
     build:
@@ -69,7 +79,7 @@ services:
       - "8084:8084"  # HTTP port
       - "9091:9091"  # gRPC port
     volumes:
-      - ./apps/frame-splitter/config:/src/config
+      - ./apps/frame-splitter/config:/app/config
       - frame-data:/data/frames
     environment:
       - HTTP_ADDRESS=:8084
@@ -77,6 +87,44 @@ services:
       - ROUTER_ADDRESS=stream-router:9090
     depends_on:
       - stream-router
+    networks:
+      - streamhive-network
+
+  # enhancement-service:
+  #   build:
+  #     context: .
+  #     dockerfile: apps/enhancement-service/Dockerfile
+  #   ports:
+  #     - "8085:8085"  # HTTP port
+  #     - "9092:9092"  # gRPC port
+  #   volumes:
+  #     - ./apps/enhancement-service/config:/app/config
+  #   environment:
+  #     - HTTP_ADDRESS=:8085
+  #     - GRPC_ADDRESS=:9092
+  #   depends_on:
+  #     - stream-router
+  #     - frame-splitter
+  #   networks:
+  #     - streamhive-network
+
+  # encoder-service:
+  #   build:
+  #     context: .
+  #     dockerfile: apps/encoder-service/Dockerfile
+  #   ports:
+  #     - "8089:8089"  # HTTP port
+  #     - "9093:9093"  # gRPC port
+  #   volumes:
+  #     - ./apps/encoder-service/config:/app/config
+  #   environment:
+  #     - HTTP_ADDRESS=:8089
+  #     - GRPC_ADDRESS=:9093
+  #   depends_on:
+  #     - stream-router
+  #     - frame-splitter
+  #   networks:
+  #     - streamhive-network
 
   websocket-signaling:
     build:
@@ -92,7 +140,7 @@ services:
       - HTTP_ADDRESS=:8086
       - WS_ADDRESS=:8087
       - GRPC_ADDRESS=:50052
-      - WEBRTC_OUT_ADDRESS=webrtc-out:50053
+      - WEBRTC_OUT_ADDRESS=webrtc-out:50053  # Use service name for DNS resolution
       - ROUTER_ADDRESS=stream-router:9090
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8086/health"]
@@ -101,6 +149,9 @@ services:
       retries: 3
     depends_on:
       - stream-router
+      - webrtc-out
+    networks:
+      - streamhive-network
 
   webrtc-out:
     build:
@@ -123,9 +174,9 @@ services:
       timeout: 10s
       retries: 3
     depends_on:
-      - stream-router
       - frame-splitter
-      - websocket-signaling
+    networks:
+      - streamhive-network
 
 volumes:
   frame-data:
