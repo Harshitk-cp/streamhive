@@ -1,6 +1,7 @@
 package model
 
 import (
+	"sync"
 	"time"
 
 	"github.com/pion/webrtc/v3"
@@ -123,6 +124,7 @@ type Stream struct {
 	TotalViewers         int64
 	MaxConcurrentViewers int
 	CurrentViewers       int
+	Mutex                sync.Mutex
 }
 
 // StreamOptions represents options for a WebRTC stream

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/Harshitk-cp/streamhive/apps/websocket-signaling/internal/model"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 
 	webrtcpb "github.com/Harshitk-cp/streamhive/libs/proto/webrtc"
 )
@@ -97,9 +99,31 @@ func (s *SignalingService) RegisterClient(clientID, streamID string, sendChan ch
 	s.clientsMutex.Lock()
 	defer s.clientsMutex.Unlock()
 
-	// Check if client already exists
-	if _, exists := s.clients[clientID]; exists {
-		return fmt.Errorf("client %s already registered", clientID)
+	// Check if client already exists - if so, unregister first to clean up properly
+	if existingClient, exists := s.clients[clientID]; exists {
+		log.Printf("Client %s already exists, cleaning up previous session", clientID)
+		// Close existing send channel
+		close(existingClient.SendChannel)
+
+		// Remove from previous stream if different
+		if existingClient.StreamID != streamID {
+			s.streamsMutex.Lock()
+			if stream, streamExists := s.streams[existingClient.StreamID]; streamExists {
+				stream.Mutex.Lock()
+				delete(stream.Clients, clientID)
+				stream.Mutex.Unlock()
+
+				// Check if stream is now empty
+				if len(stream.Clients) == 0 {
+					delete(s.streams, existingClient.StreamID)
+					log.Printf("Removed empty stream: %s", existingClient.StreamID)
+				}
+			}
+			s.streamsMutex.Unlock()
+		}
+
+		// Remove from clients map
+		delete(s.clients, clientID)
 	}
 
 	// Create client session
@@ -116,7 +140,7 @@ func (s *SignalingService) RegisterClient(clientID, streamID string, sendChan ch
 	// Add to clients map
 	s.clients[clientID] = client
 
-	// Get or create stream session
+	// Get or create stream session with proper locking
 	s.streamsMutex.Lock()
 	stream, exists := s.streams[streamID]
 	if !exists {
@@ -130,9 +154,10 @@ func (s *SignalingService) RegisterClient(clientID, streamID string, sendChan ch
 	}
 	s.streamsMutex.Unlock()
 
-	// Add client to stream
+	// Add client to stream with proper locking
 	stream.Mutex.Lock()
 	stream.Clients[clientID] = client
+	stream.LastActivity = time.Now()
 	stream.Mutex.Unlock()
 
 	log.Printf("Client %s registered for stream %s (publisher: %v)", clientID, streamID, isPublisher)
@@ -143,19 +168,21 @@ func (s *SignalingService) RegisterClient(clientID, streamID string, sendChan ch
 func (s *SignalingService) UnregisterClient(clientID string) {
 	s.clientsMutex.Lock()
 	client, exists := s.clients[clientID]
-	s.clientsMutex.Unlock()
-
 	if !exists {
+		s.clientsMutex.Unlock()
 		return
 	}
 
+	// Get streamID before deleting the client
 	streamID := client.StreamID
 
-	// Remove client from stream
-	s.streamsMutex.RLock()
-	stream, streamExists := s.streams[streamID]
-	s.streamsMutex.RUnlock()
+	// Delete from clients map
+	delete(s.clients, clientID)
+	s.clientsMutex.Unlock()
 
+	// Remove client from stream with proper locking
+	s.streamsMutex.Lock()
+	stream, streamExists := s.streams[streamID]
 	if streamExists {
 		stream.Mutex.Lock()
 		delete(stream.Clients, clientID)
@@ -164,17 +191,11 @@ func (s *SignalingService) UnregisterClient(clientID string) {
 
 		// If no clients left in stream, remove stream
 		if clientCount == 0 {
-			s.streamsMutex.Lock()
 			delete(s.streams, streamID)
-			s.streamsMutex.Unlock()
+			log.Printf("Removed empty stream: %s", streamID)
 		}
 	}
-
-	// Update client status
-	s.clientsMutex.Lock()
-	client.Connected = false
-	delete(s.clients, clientID)
-	s.clientsMutex.Unlock()
+	s.streamsMutex.Unlock()
 
 	log.Printf("Client %s unregistered from stream %s", clientID, streamID)
 }
@@ -284,33 +305,83 @@ func (s *SignalingService) routeMessage(msg model.SignalingMessage) {
 func (s *SignalingService) handleOffer(msg model.SignalingMessage) {
 	log.Printf("Received offer from %s for stream %s", msg.SenderID, msg.StreamID)
 
-	// Parse the offer SDP
+	// Parse offer payload
 	var offerSDP string
 
-	// Try parsing as JSON object first
-	var offerData map[string]interface{}
-	err := json.Unmarshal(msg.Payload, &offerData)
-	if err == nil {
-		// Successfully parsed as JSON object
-		sdp, ok := offerData["sdp"].(string)
-		if !ok {
-			log.Printf("Invalid offer format: missing sdp field")
-			s.sendErrorResponse(msg.SenderID, msg.StreamID, "invalid_offer", "Offer is missing SDP field")
-			return
-		}
-		offerSDP = sdp
-	} else {
-		// Try parsing as a direct string
-		err = json.Unmarshal(msg.Payload, &offerSDP)
+	// The Payload could be either a json.RawMessage or another type
+	// Convert the payload to a string for processing
+	var payloadStr string
+
+	// Check the type of Payload and convert appropriately
+	switch p := msg.Payload.(type) {
+	case json.RawMessage:
+		payloadStr = string(p)
+	case []byte:
+		payloadStr = string(p)
+	case string:
+		payloadStr = p
+	default:
+		// Convert unknown types to JSON
+		payloadBytes, err := json.Marshal(msg.Payload)
 		if err != nil {
-			log.Printf("Error parsing offer: %v", err)
+			log.Printf("Error marshaling payload: %v", err)
 			s.sendErrorResponse(msg.SenderID, msg.StreamID, "invalid_offer", "Could not parse offer payload")
 			return
 		}
+		payloadStr = string(payloadBytes)
 	}
 
+	// First try to unmarshal as JSON object containing SDP
+	var offerPayload map[string]interface{}
+	if err := json.Unmarshal([]byte(payloadStr), &offerPayload); err == nil {
+		// Successfully parsed as JSON object
+		if sdp, ok := offerPayload["sdp"].(string); ok {
+			offerSDP = sdp
+			log.Printf("Successfully extracted SDP from JSON payload")
+		} else {
+			log.Printf("Invalid offer format: missing sdp field in JSON object")
+			s.sendErrorResponse(msg.SenderID, msg.StreamID, "invalid_offer", "Offer is missing SDP field")
+			return
+		}
+	} else {
+		// Try if payload is simply a string containing the SDP
+		var sdpString string
+		if err := json.Unmarshal([]byte(payloadStr), &sdpString); err == nil {
+			offerSDP = sdpString
+			log.Printf("Successfully extracted SDP as direct string")
+		} else {
+			// If it doesn't parse as JSON at all, try using the payload string directly
+			if strings.HasPrefix(strings.TrimSpace(payloadStr), "v=0") {
+				offerSDP = payloadStr
+				log.Printf("Using payload directly as SDP string")
+			} else {
+				log.Printf("Error parsing offer: %v", err)
+				s.sendErrorResponse(msg.SenderID, msg.StreamID, "invalid_offer", "Could not parse offer payload")
+				return
+			}
+		}
+	}
+
+	// Ensure the SDP doesn't have surrounding quotes and is properly formatted
+	offerSDP = strings.Trim(offerSDP, "\"")
+
+	// Make sure the SDP starts with v=0
+	if !strings.HasPrefix(strings.TrimSpace(offerSDP), "v=0") {
+		log.Printf("SDP doesn't start with v=0, which is invalid")
+		s.sendErrorResponse(msg.SenderID, msg.StreamID, "invalid_offer", "SDP format is invalid")
+		return
+	}
+
+	// Log the SDP for debugging (truncated to avoid massive logs)
+	sdpPreviewLength := 50
+	if len(offerSDP) < sdpPreviewLength {
+		sdpPreviewLength = len(offerSDP)
+	}
+	log.Printf("Sending SDP offer to WebRTC service (first %d chars): %s",
+		sdpPreviewLength, offerSDP[:sdpPreviewLength])
+
 	// Connect to WebRTC-out service via gRPC
-	conn, err := grpc.Dial(s.cfg.WebRTCOut.Address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	webrtcClient, conn, err := s.getWebRTCServiceClient()
 	if err != nil {
 		log.Printf("Failed to connect to WebRTC-out service: %v", err)
 		s.sendErrorResponse(msg.SenderID, msg.StreamID, "service_unavailable", "WebRTC service is currently unavailable")
@@ -318,15 +389,13 @@ func (s *SignalingService) handleOffer(msg model.SignalingMessage) {
 	}
 	defer conn.Close()
 
-	// Create WebRTC client
-	webrtcClient := webrtcpb.NewWebRTCServiceClient(conn)
-
-	// Forward offer to WebRTC-out service - IMPORTANT: pass the SDP as a plain string, not JSON
+	// Forward offer to WebRTC-out service
 	req := &webrtcpb.OfferRequest{
 		StreamId: msg.StreamID,
 		ViewerId: msg.SenderID,
-		Offer:    offerSDP, // No JSON.stringify here
+		Offer:    offerSDP, // Plain SDP string without any JSON formatting
 	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -337,22 +406,26 @@ func (s *SignalingService) handleOffer(msg model.SignalingMessage) {
 		return
 	}
 
-	// Send answer back to client
-	answerPayload, err := json.Marshal(map[string]string{
+	// Instead of Base64 encoding, create proper JSON
+	answerData := map[string]string{
 		"sdp": resp.Answer,
-	})
+	}
+
+	// Marshal to JSON
+	answerJSON, err := json.Marshal(answerData)
 	if err != nil {
-		log.Printf("Failed to marshal answer: %v", err)
+		log.Printf("Failed to marshal answer to JSON: %v", err)
 		s.sendErrorResponse(msg.SenderID, msg.StreamID, "internal_error", "Internal server error")
 		return
 	}
 
+	// Create answer message with proper JSON payload
 	answer := model.SignalingMessage{
 		Type:        "answer",
 		StreamID:    msg.StreamID,
 		SenderID:    "server",
 		RecipientID: msg.SenderID,
-		Payload:     answerPayload,
+		Payload:     answerJSON, // Use the JSON bytes directly
 	}
 
 	s.clientsMutex.RLock()
@@ -547,6 +620,50 @@ func (s *SignalingService) handlePing(msg model.SignalingMessage) {
 			log.Printf("Failed to send pong to %s: channel full or closed", msg.SenderID)
 		}
 	}
+}
+
+// getWebRTCServiceClient gets a client for the WebRTC service with retry logic
+func (s *SignalingService) getWebRTCServiceClient() (webrtcpb.WebRTCServiceClient, *grpc.ClientConn, error) {
+	// Try to connect with exponential backoff
+	var conn *grpc.ClientConn
+	var err error
+	maxRetries := 3
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			log.Printf("Retrying connection to WebRTC service (attempt %d/%d)", attempt+1, maxRetries)
+			// Exponential backoff: 100ms, 200ms, 400ms
+			time.Sleep(time.Duration(100*(1<<attempt)) * time.Millisecond)
+		}
+
+		// Connect with modified options for better reliability
+		conn, err = grpc.Dial(
+			s.cfg.WebRTCOut.Address,
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+			grpc.WithBlock(),
+			grpc.WithKeepaliveParams(keepalive.ClientParameters{
+				Time:                5 * time.Second,
+				Timeout:             2 * time.Second,
+				PermitWithoutStream: true,
+			}),
+			grpc.WithTimeout(5*time.Second),
+		)
+
+		if err == nil {
+			// Successfully connected
+			break
+		}
+
+		log.Printf("Attempt %d: Failed to connect to WebRTC service: %v", attempt+1, err)
+	}
+
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to connect to WebRTC-out service after %d attempts: %w", maxRetries, err)
+	}
+
+	// Create client
+	client := webrtcpb.NewWebRTCServiceClient(conn)
+	return client, conn, nil
 }
 
 // GetClientCount returns the number of clients connected to a stream

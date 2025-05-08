@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/Harshitk-cp/streamhive/apps/webrtc-out/internal/config"
 	"github.com/Harshitk-cp/streamhive/apps/webrtc-out/internal/model"
+	"github.com/Harshitk-cp/streamhive/apps/webrtc-out/internal/util"
 	signalpb "github.com/Harshitk-cp/streamhive/libs/proto/signaling"
 	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v3"
@@ -152,8 +154,10 @@ func (s *WebRTCService) CreateStream(streamID string) (*model.Stream, error) {
 	defer s.streamsMutex.Unlock()
 
 	// Check if stream already exists
-	if _, exists := s.streams[streamID]; exists {
-		return nil, fmt.Errorf("stream already exists: %s", streamID)
+	if existingStream, exists := s.streams[streamID]; exists {
+		log.Printf("Stream %s already exists, returning existing stream", streamID)
+		existingStream.LastActivity = time.Now()
+		return existingStream, nil
 	}
 
 	// Create stream
@@ -161,6 +165,7 @@ func (s *WebRTCService) CreateStream(streamID string) (*model.Stream, error) {
 		ID:                   streamID,
 		Status:               model.StreamStatusIdle,
 		CreatedAt:            time.Now(),
+		LastActivity:         time.Now(),
 		Viewers:              make(map[string]*model.Viewer),
 		VideoCodec:           model.VideoCodecH264,
 		AudioCodec:           model.AudioCodecOpus,
@@ -174,11 +179,12 @@ func (s *WebRTCService) CreateStream(streamID string) (*model.Stream, error) {
 
 	// Create frame queue for this stream
 	s.queuesMutex.Lock()
-	s.frameQueues[streamID] = make(chan *model.Frame, 1000) // Buffer up to 1000 frames
+	if _, exists := s.frameQueues[streamID]; !exists {
+		s.frameQueues[streamID] = make(chan *model.Frame, 1000) // Buffer up to 1000 frames
+		// Start frame processing goroutine
+		go s.processFrames(streamID)
+	}
 	s.queuesMutex.Unlock()
-
-	// Start frame processing goroutine
-	go s.processFrames(streamID)
 
 	log.Printf("Created stream: %s", streamID)
 	return stream, nil
@@ -187,13 +193,16 @@ func (s *WebRTCService) CreateStream(streamID string) (*model.Stream, error) {
 // GetStream gets a stream by ID
 func (s *WebRTCService) GetStream(streamID string) (*model.Stream, error) {
 	s.streamsMutex.RLock()
-	defer s.streamsMutex.RUnlock()
-
-	// Check if stream exists
 	stream, exists := s.streams[streamID]
+	s.streamsMutex.RUnlock()
+
 	if !exists {
+		// Return error to trigger stream creation
 		return nil, fmt.Errorf("stream not found: %s", streamID)
 	}
+
+	// Update last activity time
+	stream.LastActivity = time.Now()
 
 	return stream, nil
 }
@@ -201,6 +210,21 @@ func (s *WebRTCService) GetStream(streamID string) (*model.Stream, error) {
 // HandleOffer handles an SDP offer from a viewer
 func (s *WebRTCService) HandleOffer(streamID, viewerID string, offer webrtc.SessionDescription) (*webrtc.SessionDescription, error) {
 	log.Printf("Handling WebRTC offer for stream %s from viewer %s", streamID, viewerID)
+
+	// Check if the viewer already exists - if so, clean up first
+	s.viewersMutex.RLock()
+	existingViewer, viewerExists := s.viewers[viewerID]
+	s.viewersMutex.RUnlock()
+
+	if viewerExists {
+		log.Printf("Viewer %s already exists with name %s, cleaning up previous connection", viewerID, existingViewer.ID)
+		s.removeViewer(viewerID)
+		// Short sleep to allow resources to be freed
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Debug log the full SDP to help diagnose issues
+	log.Printf("Full SDP offer:\n%s", offer.SDP)
 
 	// Get or create stream
 	stream, err := s.GetStream(streamID)
@@ -212,15 +236,19 @@ func (s *WebRTCService) HandleOffer(streamID, viewerID string, offer webrtc.Sess
 		}
 	}
 
-	// Create peer connection
+	// Create peer connection with explicit configuration
 	peerConnection, err := s.api.NewPeerConnection(s.webrtcConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create peer connection: %w", err)
 	}
 
-	// Create audio track
+	// Create audio track with more specific codec capabilities
 	audioTrack, err := webrtc.NewTrackLocalStaticSample(
-		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus},
+		webrtc.RTPCodecCapability{
+			MimeType:  webrtc.MimeTypeOpus,
+			ClockRate: 48000,
+			Channels:  2,
+		},
 		"audio", "streamhive-audio",
 	)
 	if err != nil {
@@ -228,9 +256,12 @@ func (s *WebRTCService) HandleOffer(streamID, viewerID string, offer webrtc.Sess
 		return nil, fmt.Errorf("failed to create audio track: %w", err)
 	}
 
-	// Create video track
+	// Create video track with more specific codec capabilities
 	videoTrack, err := webrtc.NewTrackLocalStaticSample(
-		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264},
+		webrtc.RTPCodecCapability{
+			MimeType:  webrtc.MimeTypeH264,
+			ClockRate: 90000,
+		},
 		"video", "streamhive-video",
 	)
 	if err != nil {
@@ -238,7 +269,7 @@ func (s *WebRTCService) HandleOffer(streamID, viewerID string, offer webrtc.Sess
 		return nil, fmt.Errorf("failed to create video track: %w", err)
 	}
 
-	// Add tracks to peer connection
+	// Add tracks to peer connection with explicit error handling
 	audioSender, err := peerConnection.AddTrack(audioTrack)
 	if err != nil {
 		peerConnection.Close()
@@ -250,6 +281,9 @@ func (s *WebRTCService) HandleOffer(streamID, viewerID string, offer webrtc.Sess
 		for {
 			rtcpPackets, _, rtcpErr := audioSender.ReadRTCP()
 			if rtcpErr != nil {
+				if rtcpErr != io.EOF {
+					log.Printf("Error reading audio RTCP: %v", rtcpErr)
+				}
 				return
 			}
 
@@ -274,6 +308,9 @@ func (s *WebRTCService) HandleOffer(streamID, viewerID string, offer webrtc.Sess
 		for {
 			rtcpPackets, _, rtcpErr := videoSender.ReadRTCP()
 			if rtcpErr != nil {
+				if rtcpErr != io.EOF {
+					log.Printf("Error reading video RTCP: %v", rtcpErr)
+				}
 				return
 			}
 
@@ -290,8 +327,13 @@ func (s *WebRTCService) HandleOffer(streamID, viewerID string, offer webrtc.Sess
 		}
 	}()
 
-	// Create data channel for control messages
-	dataChannel, err := peerConnection.CreateDataChannel("control", nil)
+	// Create data channel for control messages with specific configuration
+	dataChannelConfig := &webrtc.DataChannelInit{
+		Ordered:        util.BoolPtr(true),
+		MaxRetransmits: util.Uint16Ptr(3),
+	}
+
+	dataChannel, err := peerConnection.CreateDataChannel("control", dataChannelConfig)
 	if err != nil {
 		peerConnection.Close()
 		return nil, fmt.Errorf("failed to create data channel: %w", err)
@@ -392,14 +434,16 @@ func (s *WebRTCService) HandleOffer(streamID, viewerID string, offer webrtc.Sess
 		}
 	})
 
-	// Set the remote SessionDescription
-	err = peerConnection.SetRemoteDescription(offer)
-	if err != nil {
+	// Set the remote SessionDescription - log right before to help debugging
+	log.Printf("Setting remote description for viewer %s", viewerID)
+
+	if err := peerConnection.SetRemoteDescription(offer); err != nil {
+		log.Printf("Error setting remote description: %v", err)
 		peerConnection.Close()
 		return nil, fmt.Errorf("failed to set remote description: %w", err)
 	}
 
-	// Create answer
+	// Create answer - note: no VoiceActivityDetection field in AnswerOptions
 	answer, err := peerConnection.CreateAnswer(nil)
 	if err != nil {
 		peerConnection.Close()
@@ -408,10 +452,10 @@ func (s *WebRTCService) HandleOffer(streamID, viewerID string, offer webrtc.Sess
 
 	// Log SDP answer for debugging
 	log.Printf("Created SDP answer for viewer %s, type=%s", viewerID, answer.Type.String())
+	log.Printf("SDP answer preview: %s", answer.SDP[:util.Min(100, len(answer.SDP))])
 
 	// Set local SessionDescription
-	err = peerConnection.SetLocalDescription(answer)
-	if err != nil {
+	if err := peerConnection.SetLocalDescription(answer); err != nil {
 		peerConnection.Close()
 		return nil, fmt.Errorf("failed to set local description: %w", err)
 	}
@@ -554,22 +598,29 @@ func (s *WebRTCService) removeViewer(viewerID string) {
 	}
 
 	streamID := viewer.StreamID
+
+	// Remove from viewers map
 	delete(s.viewers, viewerID)
 	s.viewersMutex.Unlock()
 
-	// Close peer connection
-	if viewer.PeerConnection != nil {
-		viewer.PeerConnection.Close()
-	}
+	// Get a reference to the peer connection before cleanup
+	peerConnection := viewer.PeerConnection
 
 	// Remove viewer from stream
 	s.streamsMutex.Lock()
 	stream, exists := s.streams[streamID]
 	if exists {
+		stream.Mutex.Lock()
 		delete(stream.Viewers, viewerID)
 		stream.CurrentViewers--
+		stream.Mutex.Unlock()
 	}
 	s.streamsMutex.Unlock()
+
+	// Close peer connection after removing references
+	if peerConnection != nil {
+		peerConnection.Close()
+	}
 
 	log.Printf("Removed viewer %s from stream %s", viewerID, streamID)
 }
@@ -605,7 +656,7 @@ func (s *WebRTCService) processFrames(streamID string) {
 				}
 
 				s.broadcastVideoSample(streamID, sample)
-				log.Printf("Broadcast video frame for stream %s, size=%d bytes", streamID, len(frame.Data))
+				// log.Printf("Broadcast video frame for stream %s, size=%d bytes", streamID, len(frame.Data))
 
 			case model.FrameTypeAudio:
 				// Transcode AAC to Opus if needed

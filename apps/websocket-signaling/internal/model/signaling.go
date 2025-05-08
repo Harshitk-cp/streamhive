@@ -1,18 +1,19 @@
+// apps/websocket-signaling/internal/model/signaling.go
+
 package model
 
 import (
-	"encoding/json"
 	"time"
 )
 
 // SignalingMessage represents a WebRTC signaling message
 type SignalingMessage struct {
-	Type        string          `json:"type"`
-	StreamID    string          `json:"stream_id"`
-	SenderID    string          `json:"sender_id"`
-	RecipientID string          `json:"recipient_id,omitempty"`
-	Payload     json.RawMessage `json:"payload"`
-	Timestamp   int64           `json:"timestamp,omitempty"`
+	Type        string      `json:"type"`
+	StreamID    string      `json:"stream_id"`
+	SenderID    string      `json:"sender_id"`
+	RecipientID string      `json:"recipient_id,omitempty"`
+	Payload     interface{} `json:"payload"` // Changed from json.RawMessage to interface{}
+	Timestamp   int64       `json:"timestamp,omitempty"`
 }
 
 // ClientInfo represents information about a connected client

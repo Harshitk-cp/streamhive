@@ -139,9 +139,15 @@ func setDefaults(config *Config) {
 		config.GRPC.Address = ":50052"
 	}
 
-	// Set default WebRTC Out address
+	// Set default WebRTC Out address - Update this to use IP instead of hostname
 	if config.WebRTCOut.Address == "" {
-		config.WebRTCOut.Address = "webrtc-out:50053"
+		// Try to use environment variable first, fallback to IP address instead of hostname
+		if os.Getenv("WEBRTC_OUT_ADDRESS") != "" {
+			config.WebRTCOut.Address = os.Getenv("WEBRTC_OUT_ADDRESS")
+		} else {
+			// Use direct IP address instead of hostname for Docker networking
+			config.WebRTCOut.Address = "172.17.0.1:50053" // Docker bridge network default gateway
+		}
 	}
 
 	// Set default Router address
