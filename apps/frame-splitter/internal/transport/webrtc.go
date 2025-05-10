@@ -61,8 +61,8 @@ func (c *WebRTCClient) Send(ctx context.Context, batch model.FrameBatch) error {
 			}
 
 			// Log the frame type and size
-			log.Printf("Sending %s frame to WebRTC Out: size=%d bytes, keyframe=%v",
-				f.Type, len(f.Data), f.IsKeyFrame)
+			// log.Printf("Sending %s frame to WebRTC Out: size=%d bytes, keyframe=%v",
+			// f.Type, len(f.Data), f.IsKeyFrame)
 
 			// Create frame request
 			req := &webrtcpb.PushFrameRequest{
@@ -80,14 +80,14 @@ func (c *WebRTCClient) Send(ctx context.Context, batch model.FrameBatch) error {
 			reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
 
-			resp, err := c.client.PushFrame(reqCtx, req)
+			_, err := c.client.PushFrame(reqCtx, req)
 			if err != nil {
 				log.Printf("Error sending frame to WebRTC: %v", err)
 				errors <- fmt.Errorf("failed to send frame to WebRTC: %w", err)
 				return
 			}
 
-			log.Printf("Successfully sent frame to WebRTC, response: %s", resp.Status)
+			// log.Printf("Successfully sent frame to WebRTC, response: %s", resp.Status)
 		}(frame)
 	}
 
