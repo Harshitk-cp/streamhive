@@ -108,7 +108,7 @@ func (r *FrameReceiver) subscribeToAllStreams(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
-	testStreams := []string{"test-stream-1", "test-stream-2"} // Fixed set of test streams
+	testStreams := []string{}
 
 	for {
 		select {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"strconv"
 	"strings"
@@ -15,7 +14,6 @@ import (
 	"github.com/Harshitk-cp/streamhive/apps/webrtc-out/internal/model"
 	"github.com/Harshitk-cp/streamhive/apps/webrtc-out/internal/util"
 	signalpb "github.com/Harshitk-cp/streamhive/libs/proto/signaling"
-	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v3"
 	"github.com/pion/webrtc/v3/pkg/media"
 	"google.golang.org/grpc"
@@ -242,7 +240,31 @@ func (s *WebRTCService) HandleOffer(streamID, viewerID string, offer webrtc.Sess
 		return nil, fmt.Errorf("failed to create peer connection: %w", err)
 	}
 
-	// Create audio track with more specific codec capabilities
+	// FIXED: Create transceivers with proper direction BEFORE setting the remote description
+	// This ensures that the SDP answer has the correct direction attributes
+	audioTransceiver, err := peerConnection.AddTransceiverFromKind(
+		webrtc.RTPCodecTypeAudio,
+		webrtc.RTPTransceiverInit{
+			Direction: webrtc.RTPTransceiverDirectionSendonly,
+		},
+	)
+	if err != nil {
+		peerConnection.Close()
+		return nil, fmt.Errorf("failed to add audio transceiver: %w", err)
+	}
+
+	videoTransceiver, err := peerConnection.AddTransceiverFromKind(
+		webrtc.RTPCodecTypeVideo,
+		webrtc.RTPTransceiverInit{
+			Direction: webrtc.RTPTransceiverDirectionSendonly,
+		},
+	)
+	if err != nil {
+		peerConnection.Close()
+		return nil, fmt.Errorf("failed to add video transceiver: %w", err)
+	}
+
+	// Create audio track
 	audioTrack, err := webrtc.NewTrackLocalStaticSample(
 		webrtc.RTPCodecCapability{
 			MimeType:  webrtc.MimeTypeOpus,
@@ -256,7 +278,7 @@ func (s *WebRTCService) HandleOffer(streamID, viewerID string, offer webrtc.Sess
 		return nil, fmt.Errorf("failed to create audio track: %w", err)
 	}
 
-	// Create video track with more specific codec capabilities
+	// Create video track
 	videoTrack, err := webrtc.NewTrackLocalStaticSample(
 		webrtc.RTPCodecCapability{
 			MimeType:  webrtc.MimeTypeH264,
@@ -269,60 +291,33 @@ func (s *WebRTCService) HandleOffer(streamID, viewerID string, offer webrtc.Sess
 		return nil, fmt.Errorf("failed to create video track: %w", err)
 	}
 
-	// Add tracks to peer connection with explicit error handling
-	audioSender, err := peerConnection.AddTrack(audioTrack)
-	if err != nil {
+	// Replace the transceivers' sender tracks
+	if err := audioTransceiver.Sender().ReplaceTrack(audioTrack); err != nil {
 		peerConnection.Close()
-		return nil, fmt.Errorf("failed to add audio track: %w", err)
+		return nil, fmt.Errorf("failed to replace audio track: %w", err)
+	}
+
+	if err := videoTransceiver.Sender().ReplaceTrack(videoTrack); err != nil {
+		peerConnection.Close()
+		return nil, fmt.Errorf("failed to replace video track: %w", err)
 	}
 
 	// Handle RTCP packets for audio
 	go func() {
+		rtcpBuf := make([]byte, 1500)
 		for {
-			rtcpPackets, _, rtcpErr := audioSender.ReadRTCP()
-			if rtcpErr != nil {
-				if rtcpErr != io.EOF {
-					log.Printf("Error reading audio RTCP: %v", rtcpErr)
-				}
+			if _, _, rtcpErr := audioTransceiver.Sender().Read(rtcpBuf); rtcpErr != nil {
 				return
-			}
-
-			for _, packet := range rtcpPackets {
-				switch packet.(type) {
-				case *rtcp.ReceiverReport:
-					log.Printf("Received audio RR from viewer %s", viewerID)
-				}
 			}
 		}
 	}()
 
-	// Add video track
-	videoSender, err := peerConnection.AddTrack(videoTrack)
-	if err != nil {
-		peerConnection.Close()
-		return nil, fmt.Errorf("failed to add video track: %w", err)
-	}
-
-	// Listen for RTCP packets to handle PLI/NACK
+	// Handle RTCP packets for video
 	go func() {
+		rtcpBuf := make([]byte, 1500)
 		for {
-			rtcpPackets, _, rtcpErr := videoSender.ReadRTCP()
-			if rtcpErr != nil {
-				if rtcpErr != io.EOF {
-					log.Printf("Error reading video RTCP: %v", rtcpErr)
-				}
+			if _, _, rtcpErr := videoTransceiver.Sender().Read(rtcpBuf); rtcpErr != nil {
 				return
-			}
-
-			for _, packet := range rtcpPackets {
-				switch packet := packet.(type) {
-				case *rtcp.PictureLossIndication:
-					log.Printf("Received PLI from viewer %s", viewerID)
-				case *rtcp.FullIntraRequest:
-					log.Printf("Received FIR from viewer %s", viewerID)
-				case *rtcp.ReceiverEstimatedMaximumBitrate:
-					log.Printf("Received REMB from viewer %s: %d bps", viewerID, int(packet.Bitrate))
-				}
 			}
 		}
 	}()
@@ -371,6 +366,8 @@ func (s *WebRTCService) HandleOffer(streamID, viewerID string, offer webrtc.Sess
 		LastActivity:   time.Now(),
 		StreamID:       streamID,
 		Stats:          model.ViewerStats{},
+		AudioTrack:     audioTrack,
+		VideoTrack:     videoTrack,
 	}
 
 	// Set event handlers for peer connection
@@ -434,16 +431,15 @@ func (s *WebRTCService) HandleOffer(streamID, viewerID string, offer webrtc.Sess
 		}
 	})
 
-	// Set the remote SessionDescription - log right before to help debugging
+	// Set the remote SessionDescription
 	log.Printf("Setting remote description for viewer %s", viewerID)
-
 	if err := peerConnection.SetRemoteDescription(offer); err != nil {
 		log.Printf("Error setting remote description: %v", err)
 		peerConnection.Close()
 		return nil, fmt.Errorf("failed to set remote description: %w", err)
 	}
 
-	// Create answer - note: no VoiceActivityDetection field in AnswerOptions
+	// Create answer
 	answer, err := peerConnection.CreateAnswer(nil)
 	if err != nil {
 		peerConnection.Close()
@@ -491,8 +487,11 @@ func (s *WebRTCService) HandleICECandidate(viewerID string, candidate webrtc.ICE
 
 // PushFrame pushes a frame to a stream
 func (s *WebRTCService) PushFrame(frame *model.Frame) error {
-	log.Printf("Received frame for stream %s, type=%v, size=%d bytes, keyframe=%v",
-		frame.StreamID, frame.Type, len(frame.Data), frame.IsKeyFrame)
+	// log.Printf("Received frame for stream %s, type=%v, size=%d bytes, keyframe=%v",
+	// 	frame.StreamID, frame.Type, len(frame.Data), frame.IsKeyFrame)
+
+	// log.Printf("Received frame: type=%v, size=%d, keyframe=%v, stream=%s",
+	// 	frame.Type, len(frame.Data), frame.IsKeyFrame, frame.StreamID)
 
 	s.queuesMutex.RLock()
 	frameQueue, exists := s.frameQueues[frame.StreamID]
@@ -519,7 +518,7 @@ func (s *WebRTCService) PushFrame(frame *model.Frame) error {
 	select {
 	case frameQueue <- frame:
 		// Frame added to queue
-		log.Printf("Frame added to queue for stream %s", frame.StreamID)
+		// log.Printf("Frame added to queue for stream %s", frame.StreamID)
 	default:
 		// Queue is full, drop frame
 		log.Printf("Frame queue is full for stream %s, dropping frame", frame.StreamID)
@@ -695,43 +694,93 @@ func (s *WebRTCService) processFrames(streamID string) {
 
 // broadcastVideoSample broadcasts a video sample to all viewers of a stream
 func (s *WebRTCService) broadcastVideoSample(streamID string, sample *media.Sample) {
-	s.streamsMutex.RLock()
-	defer s.streamsMutex.RUnlock()
+	// Track metrics
+	startTime := time.Now()
+	sampleSize := len(sample.Data)
 
+	// Debug log the sample data (first 10 bytes)
+	if sampleSize > 0 {
+		prefix := sample.Data
+		if len(prefix) > 10 {
+			prefix = prefix[:10]
+		}
+		log.Printf("DEBUG: Video sample first bytes: %v", prefix)
+	}
+
+	s.streamsMutex.RLock()
 	stream, exists := s.streams[streamID]
 	if !exists {
+		s.streamsMutex.RUnlock()
+		log.Printf("Error: Stream %s not found for video sample", streamID)
 		return
 	}
 
-	// Get all active viewers
+	viewerCount := len(stream.Viewers)
+	s.streamsMutex.RUnlock()
+
+	if viewerCount == 0 {
+		return // No viewers, don't log
+	}
+
+	log.Printf("Broadcasting video sample: stream=%s, size=%d bytes, viewers=%d",
+		streamID, sampleSize, viewerCount)
+
+	// Track success/failure for each viewer
+	successCount := 0
+	failureCount := 0
+
+	// Get all active viewers with minimal lock time
+	s.streamsMutex.RLock()
+	stream, exists = s.streams[streamID]
+	if !exists {
+		s.streamsMutex.RUnlock()
+		return
+	}
+
+	// Process each viewer
 	for viewerID, viewer := range stream.Viewers {
 		if viewer.Status == model.StreamStatusActive {
-			// Get peer connection
 			pc := viewer.PeerConnection
 			if pc == nil {
 				continue
 			}
 
-			// Get video sender
+			// Find video track sender
 			senders := pc.GetSenders()
 			for _, sender := range senders {
-				if sender.Track() != nil && sender.Track().Kind() == webrtc.RTPCodecTypeVideo {
-					track, ok := sender.Track().(*webrtc.TrackLocalStaticSample)
-					if !ok {
-						continue
-					}
-
-					if err := track.WriteSample(*sample); err != nil {
-						log.Printf("Failed to write video sample to viewer %s: %v", viewerID, err)
-					} else {
-						viewer.TotalBytes += int64(len(sample.Data))
-						viewer.Stats.VideoBytesSent += int64(len(sample.Data))
-						viewer.Stats.VideoPacketsSent++
-					}
-					break
+				if sender.Track() == nil || sender.Track().Kind() != webrtc.RTPCodecTypeVideo {
+					continue
 				}
+
+				track, ok := sender.Track().(*webrtc.TrackLocalStaticSample)
+				if !ok {
+					log.Printf("Error: Track for viewer %s is not TrackLocalStaticSample", viewerID)
+					continue
+				}
+
+				// Write sample with detailed error handling
+				if err := track.WriteSample(*sample); err != nil {
+					failureCount++
+					log.Printf("Error writing video sample to viewer %s: %v", viewerID, err)
+				} else {
+					successCount++
+					// Update stats
+					viewer.TotalBytes += int64(sampleSize)
+					viewer.Stats.VideoBytesSent += int64(sampleSize)
+					viewer.Stats.VideoPacketsSent++
+				}
+				break
 			}
 		}
+	}
+	s.streamsMutex.RUnlock()
+
+	// Log delivery stats
+	if successCount > 0 || failureCount > 0 {
+		log.Printf("Video delivery stats: success=%d, failure=%d, rate=%.1f%%, took=%dms",
+			successCount, failureCount,
+			float64(successCount)/float64(successCount+failureCount)*100,
+			time.Since(startTime).Milliseconds())
 	}
 }
 
@@ -747,31 +796,14 @@ func (s *WebRTCService) broadcastAudioSample(streamID string, sample *media.Samp
 
 	// Get all active viewers
 	for viewerID, viewer := range stream.Viewers {
-		if viewer.Status == model.StreamStatusActive {
-			// Get peer connection
-			pc := viewer.PeerConnection
-			if pc == nil {
-				continue
-			}
-
-			// Get audio sender
-			senders := pc.GetSenders()
-			for _, sender := range senders {
-				if sender.Track() != nil && sender.Track().Kind() == webrtc.RTPCodecTypeAudio {
-					track, ok := sender.Track().(*webrtc.TrackLocalStaticSample)
-					if !ok {
-						continue
-					}
-
-					if err := track.WriteSample(*sample); err != nil {
-						log.Printf("Failed to write audio sample to viewer %s: %v", viewerID, err)
-					} else {
-						viewer.TotalBytes += int64(len(sample.Data))
-						viewer.Stats.AudioBytesSent += int64(len(sample.Data))
-						viewer.Stats.AudioPacketsSent++
-					}
-					break
-				}
+		if viewer.Status == model.StreamStatusActive && viewer.AudioTrack != nil {
+			// Use the stored track reference directly
+			if err := viewer.AudioTrack.WriteSample(*sample); err != nil {
+				log.Printf("Failed to write audio sample to viewer %s: %v", viewerID, err)
+			} else {
+				viewer.TotalBytes += int64(len(sample.Data))
+				viewer.Stats.AudioBytesSent += int64(len(sample.Data))
+				viewer.Stats.AudioPacketsSent++
 			}
 		}
 	}

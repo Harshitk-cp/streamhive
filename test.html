@@ -321,6 +321,49 @@
       width: 0%;
       transition: width 0.3s ease;
     }
+
+    /* Adding tooltips for debugging info */
+    .tooltip {
+      position: relative;
+      display: inline-block;
+    }
+
+    .tooltip .tooltiptext {
+      visibility: hidden;
+      width: 200px;
+      background-color: #333;
+      color: #fff;
+      text-align: left;
+      border-radius: 6px;
+      padding: 10px;
+      position: absolute;
+      z-index: 1;
+      bottom: 125%;
+      left: 50%;
+      margin-left: -100px;
+      opacity: 0;
+      transition: opacity 0.3s;
+      font-size: 0.8rem;
+      white-space: pre-wrap;
+    }
+
+    .tooltip:hover .tooltiptext {
+      visibility: visible;
+      opacity: 1;
+    }
+
+    /* Added styles for diagnostic buttons */
+    .btn-sm {
+      padding: 5px 10px;
+      font-size: 0.85rem;
+    }
+
+    .diagnostic-buttons {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+      flex-wrap: wrap;
+    }
   </style>
 </head>
 <body>
@@ -339,7 +382,7 @@
           </div>
 
           <div class="video-container">
-            <video id="videoElement" autoplay playsinline controls muted></video>
+            <video id="videoElement" autoplay playsinline controls></video>
             <div id="statusOverlay" class="status-overlay">
               <div class="spinner"></div>
               <div id="statusText">Not connected</div>
@@ -361,6 +404,14 @@
           <div class="btn-actions">
             <button id="connectBtn" class="btn btn-primary">Connect</button>
             <button id="disconnectBtn" class="btn btn-danger" disabled>Disconnect</button>
+            <button id="toggleMuteBtn" class="btn">Unmute</button>
+          </div>
+
+          <div class="diagnostic-buttons">
+            <button id="checkMediaBtn" class="btn btn-sm">Check Media Tracks</button>
+            <button id="forceSendPliBtn" class="btn btn-sm">Force PLI</button>
+            <button id="downloadSdpBtn" class="btn btn-sm">Download SDP</button>
+            <button id="restartIceBtn" class="btn btn-sm">Restart ICE</button>
           </div>
 
           <div class="stats-container">
@@ -370,17 +421,19 @@
                 <div id="statBitrate" class="stat-value">0 kbps</div>
                 <div class="stat-label">Bitrate</div>
               </div>
-              <div class="stat-item">
+              <div class="stat-item tooltip">
                 <div id="statResolution" class="stat-value">0x0</div>
                 <div class="stat-label">Resolution</div>
+                <span class="tooltiptext" id="resolutionDetails">No resolution data available</span>
               </div>
               <div class="stat-item">
                 <div id="statFramerate" class="stat-value">0 fps</div>
                 <div class="stat-label">Framerate</div>
               </div>
-              <div class="stat-item">
+              <div class="stat-item tooltip">
                 <div id="statLatency" class="stat-value">0 ms</div>
                 <div class="stat-label">Latency</div>
+                <span class="tooltiptext" id="networkDetails">No network data available</span>
               </div>
             </div>
           </div>
@@ -406,17 +459,24 @@
     const serverUrlInput = document.getElementById('serverUrl');
     const connectBtn = document.getElementById('connectBtn');
     const disconnectBtn = document.getElementById('disconnectBtn');
+    const toggleMuteBtn = document.getElementById('toggleMuteBtn');
     const clearLogBtn = document.getElementById('clearLogBtn');
     const logContainer = document.getElementById('logContainer');
     const connectionStatus = document.getElementById('connectionStatus');
     const statusOverlay = document.getElementById('statusOverlay');
     const statusText = document.getElementById('statusText');
+    const checkMediaBtn = document.getElementById('checkMediaBtn');
+    const forceSendPliBtn = document.getElementById('forceSendPliBtn');
+    const downloadSdpBtn = document.getElementById('downloadSdpBtn');
+    const restartIceBtn = document.getElementById('restartIceBtn');
 
     // Stats elements
     const statBitrate = document.getElementById('statBitrate');
     const statResolution = document.getElementById('statResolution');
     const statFramerate = document.getElementById('statFramerate');
     const statLatency = document.getElementById('statLatency');
+    const resolutionDetails = document.getElementById('resolutionDetails');
+    const networkDetails = document.getElementById('networkDetails');
 
     // WebRTC Configuration
     const webrtcConfig = {
@@ -440,6 +500,11 @@
     let pingInterval = null;
     let currentStream = null;
     let lastIceConnectionState = null;
+    let lastSdpOffer = '';
+    let lastSdpAnswer = '';
+    let tracksReceived = { audio: false, video: false };
+    let lastBytesReceived = { audio: 0, video: 0 };
+    let lastTimestamp = 0;
 
     const MAX_RECONNECT_ATTEMPTS = 5;
     const STATS_INTERVAL_MS = 1000;
@@ -449,169 +514,371 @@
     connectBtn.addEventListener('click', connect);
     disconnectBtn.addEventListener('click', disconnect);
     clearLogBtn.addEventListener('click', clearLog);
+    toggleMuteBtn.addEventListener('click', toggleMute);
+    checkMediaBtn.addEventListener('click', checkMediaStatus);
+    forceSendPliBtn.addEventListener('click', forceSendPli);
+    downloadSdpBtn.addEventListener('click', downloadSdp);
+    restartIceBtn.addEventListener('click', restartIce);
+
+    // Add video element event listeners
+    videoElement.addEventListener('stalled', () => {
+      log('Video playback stalled', 'warning');
+    });
+
+    videoElement.addEventListener('waiting', () => {
+      log('Video waiting for data', 'warning');
+    });
+
+    videoElement.addEventListener('canplay', () => {
+      log('Video can start playing', 'success');
+    });
+
+    videoElement.addEventListener('playing', () => {
+      log('Video is now playing!', 'success');
+      updateConnectionStatus('online');
+      statusOverlay.classList.add('hidden');
+    });
+
+    videoElement.addEventListener('error', (e) => {
+      log(`Video error: ${videoElement.error ? videoElement.error.message : 'Unknown error'}`, 'error');
+    });
 
     // Initialize
     updateConnectionStatus('offline');
     log('StreamHive WebRTC Player initialized');
 
+    // Toggle mute function
+    function toggleMute() {
+      if (videoElement.srcObject) {
+        const audioTracks = videoElement.srcObject.getAudioTracks();
+        if (audioTracks.length > 0) {
+          const track = audioTracks[0];
+          const isMuted = !track.enabled;
+          track.enabled = isMuted;
+          toggleMuteBtn.textContent = isMuted ? 'Mute' : 'Unmute';
+          log(`Audio ${isMuted ? 'unmuted' : 'muted'}`, 'info');
+        } else {
+          videoElement.muted = !videoElement.muted;
+          toggleMuteBtn.textContent = videoElement.muted ? 'Unmute' : 'Mute';
+          log(`Video ${videoElement.muted ? 'muted' : 'unmuted'}`, 'info');
+        }
+      } else {
+        log('No stream available to mute/unmute', 'warning');
+      }
+    }
+
+    // Check media status function
+    function checkMediaStatus() {
+      log('---- Media Status Check ----', 'info');
+
+      if (currentStream) {
+        const videoTracks = currentStream.getVideoTracks();
+        const audioTracks = currentStream.getAudioTracks();
+
+        log(`Stream has ${videoTracks.length} video and ${audioTracks.length} audio tracks`, 'info');
+
+        videoTracks.forEach((track, index) => {
+          log(`Video track ${index}: enabled=${track.enabled}, muted=${track.muted}, readyState=${track.readyState}`, 'info');
+        });
+
+        audioTracks.forEach((track, index) => {
+          log(`Audio track ${index}: enabled=${track.enabled}, muted=${track.muted}, readyState=${track.readyState}`, 'info');
+        });
+      } else {
+        log('No active stream available', 'warning');
+      }
+
+      // Check video element state
+      log(`Video element: paused=${videoElement.paused}, ended=${videoElement.ended}, ` +
+          `readyState=${videoElement.readyState}, networkState=${videoElement.networkState}`, 'info');
+
+      if (peerConnection) {
+        log(`Peer connection state: connection=${peerConnection.connectionState}, ` +
+            `ICE=${peerConnection.iceConnectionState}, signaling=${peerConnection.signalingState}`, 'info');
+
+        // Get and log transceivers
+        const transceivers = peerConnection.getTransceivers();
+        log(`Transceivers: ${transceivers.length}`, 'info');
+
+        transceivers.forEach((transceiver, index) => {
+          log(`Transceiver ${index}: kind=${transceiver.receiver.track ? transceiver.receiver.track.kind : 'unknown'}, ` +
+              `direction=${transceiver.direction}, ` +
+              `currentDirection=${transceiver.currentDirection || 'not set'}`, 'info');
+        });
+      } else {
+        log('No peer connection available', 'warning');
+      }
+
+      log('---- End Media Status Check ----', 'info');
+    }
+
+    // Force sending a Picture Loss Indication (PLI)
+    async function forceSendPli() {
+      if (!peerConnection) {
+        log('No peer connection available', 'warning');
+        return;
+      }
+
+      try {
+        const senders = peerConnection.getSenders();
+        for (const sender of senders) {
+          if (sender.track && sender.track.kind === 'video') {
+            log('Sending Picture Loss Indication (PLI)', 'info');
+
+            // Create RTCP PLI packet
+            const rtcpSender = sender.transport;
+            if (rtcpSender && rtcpSender.send) {
+              // If direct send is available (newer browsers)
+              const pliPacket = { type: 'picture-loss-indication', mediaSourceId: sender.track.id };
+              rtcpSender.send(pliPacket);
+              log('PLI sent successfully', 'success');
+            } else {
+              // Fall back to stats as a trigger for PLI (indirect)
+              await sender.getStats();
+              log('Stats-based PLI trigger sent', 'info');
+            }
+
+            return;
+          }
+        }
+        log('No video sender found to send PLI', 'warning');
+      } catch (error) {
+        log(`Error sending PLI: ${error.message}`, 'error');
+      }
+    }
+
+    // Download SDP information for debugging
+    function downloadSdp() {
+      if (!lastSdpOffer && !lastSdpAnswer) {
+        log('No SDP information available', 'warning');
+        return;
+      }
+
+      const sdpData = {
+        offer: lastSdpOffer,
+        answer: lastSdpAnswer,
+        timestamp: new Date().toISOString(),
+        streamId: streamIdInput.value,
+        clientId: clientId
+      };
+
+      const blob = new Blob([JSON.stringify(sdpData, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `sdp-debug-${new Date().getTime()}.json`;
+      document.body.appendChild(a);
+      a.click();
+
+      setTimeout(() => {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }, 100);
+
+      log('SDP information downloaded', 'success');
+    }
+
+    // Restart ICE connection
+    async function restartIce() {
+      if (!peerConnection || !connected) {
+        log('No active connection to restart', 'warning');
+        return;
+      }
+
+      try {
+        log('Initiating ICE restart...', 'info');
+
+        // Create offer with ICE restart
+        const offer = await peerConnection.createOffer({
+          iceRestart: true,
+          offerToReceiveAudio: true,
+          offerToReceiveVideo: true
+        });
+
+        log('Setting local description for ICE restart', 'info');
+        await peerConnection.setLocalDescription(offer);
+
+        // Save for debugging
+        lastSdpOffer = offer.sdp;
+
+        // Send the offer to the server
+        sendSignalingMessage('offer', {
+          sdp: offer.sdp
+        });
+
+        log('ICE restart initiated', 'success');
+      } catch (error) {
+        log(`ICE restart error: ${error.message}`, 'error');
+      }
+    }
+
     // Connect to WebRTC stream
     async function connect() {
-  try {
-    const streamId = streamIdInput.value.trim();
-    const serverUrl = serverUrlInput.value.trim();
+      try {
+        const streamId = streamIdInput.value.trim();
+        const serverUrl = serverUrlInput.value.trim();
 
-    if (!streamId) {
-      log('Please enter a Stream ID', 'error');
-      return;
+        if (!streamId) {
+          log('Please enter a Stream ID', 'error');
+          return;
+        }
+
+        if (!serverUrl) {
+          log('Please enter the WebSocket server URL', 'error');
+          return;
+        }
+
+        // Update UI
+        updateConnectionStatus('connecting');
+        connectBtn.disabled = true;
+        streamIdInput.disabled = true;
+        serverUrlInput.disabled = true;
+        disconnectBtn.disabled = false;
+        statusText.textContent = 'Connecting...';
+        statusOverlay.classList.remove('hidden');
+
+        log(`Connecting to stream: ${streamId}...`);
+
+        // Ensure we're starting with a clean slate
+        if (peerConnection || signaling) {
+          log('Cleaning up previous connection first...', 'info');
+          resetConnection();
+
+          // Small delay to ensure cleanup is complete
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+
+        // Reset track status
+        tracksReceived = { audio: false, video: false };
+
+        // Create WebRTC peer connection
+        createPeerConnection();
+
+        // Connect to signaling server with timeout
+        try {
+          await connectSignalingServer(streamId, serverUrl);
+        } catch (error) {
+          log(`Signaling connection error: ${error.message}`, 'error');
+          resetConnection();
+          return;
+        }
+
+        // Start stats monitoring
+        startStatsMonitoring();
+
+      } catch (error) {
+        log(`Connection error: ${error.message}`, 'error');
+        resetConnection();
+      }
     }
-
-    if (!serverUrl) {
-      log('Please enter the WebSocket server URL', 'error');
-      return;
-    }
-
-    // Update UI
-    updateConnectionStatus('connecting');
-    connectBtn.disabled = true;
-    streamIdInput.disabled = true;
-    serverUrlInput.disabled = true;
-    disconnectBtn.disabled = false;
-    statusText.textContent = 'Connecting...';
-    statusOverlay.classList.remove('hidden');
-
-    log(`Connecting to stream: ${streamId}...`);
-
-    // Ensure we're starting with a clean slate
-    if (peerConnection || signaling) {
-      log('Cleaning up previous connection first...', 'info');
-      resetConnection();
-
-      // Small delay to ensure cleanup is complete
-      await new Promise(resolve => setTimeout(resolve, 500));
-    }
-
-    // Create WebRTC peer connection
-    createPeerConnection();
-
-    // Connect to signaling server with timeout
-    try {
-      await connectSignalingServer(streamId, serverUrl);
-    } catch (error) {
-      log(`Signaling connection error: ${error.message}`, 'error');
-      resetConnection();
-      return;
-    }
-
-    // Start stats monitoring
-    startStatsMonitoring();
-
-  } catch (error) {
-    log(`Connection error: ${error.message}`, 'error');
-    resetConnection();
-  }
-}
 
     // Disconnect from stream
     function disconnect() {
-  log('Disconnecting from stream...', 'info');
+      log('Disconnecting from stream...', 'info');
 
-  stopStatsMonitoring();
+      stopStatsMonitoring();
 
-  // Stop ping interval
-  if (pingInterval) {
-    clearInterval(pingInterval);
-    pingInterval = null;
-  }
+      // Stop ping interval
+      if (pingInterval) {
+        clearInterval(pingInterval);
+        pingInterval = null;
+      }
 
-  // Ensure proper reset of all connections
-  resetConnection();
+      // Ensure proper reset of all connections
+      resetConnection();
 
-  log('Disconnected from stream', 'info');
+      log('Disconnected from stream', 'info');
 
-  // Add a short delay before allowing reconnection
-  // This helps ensure resources are fully cleaned up
-  setTimeout(() => {
-    connectBtn.disabled = false;
-  }, 1000);
-}
+      // Add a short delay before allowing reconnection
+      // This helps ensure resources are fully cleaned up
+      setTimeout(() => {
+        connectBtn.disabled = false;
+      }, 1000);
+    }
 
-// Reconnect function with improved error handling
-function reconnect() {
-  log('Attempting to reconnect...', 'info');
+    // Reconnect function with improved error handling
+    function reconnect() {
+      log('Attempting to reconnect...', 'info');
 
-  // First disconnect properly to clean up resources
-  disconnect();
+      // First disconnect properly to clean up resources
+      disconnect();
 
-  // Wait a moment before reconnecting
-  setTimeout(() => {
-    // Reset reconnect attempts counter since this is a manual reconnect
-    reconnectAttempts = 0;
+      // Wait a moment before reconnecting
+      setTimeout(() => {
+        // Reset reconnect attempts counter since this is a manual reconnect
+        reconnectAttempts = 0;
 
-    // Start connection process again
-    connect();
-  }, 2000);
-}
+        // Start connection process again
+        connect();
+      }, 2000);
+    }
 
     // Reset connection on error
     function resetConnection() {
-  // First properly close all existing connections
-  if (peerConnection) {
-    log('Cleaning up previous WebRTC connection', 'info');
-    // Close all tracks
-    if (peerConnection.getSenders) {
-      const senders = peerConnection.getSenders();
-      senders.forEach(sender => {
-        if (sender.track) {
-          sender.track.stop();
+      // First properly close all existing connections
+      if (peerConnection) {
+        log('Cleaning up previous WebRTC connection', 'info');
+        // Close all tracks
+        if (peerConnection.getSenders) {
+          const senders = peerConnection.getSenders();
+          senders.forEach(sender => {
+            if (sender.track) {
+              sender.track.stop();
+            }
+          });
         }
-      });
+
+        // Close data channels
+        const dataChannels = peerConnection.getDataChannels ? peerConnection.getDataChannels() : [];
+        dataChannels.forEach(channel => {
+          channel.close();
+        });
+
+        // Close the connection
+        peerConnection.close();
+        peerConnection = null;
+      }
+
+      // Close signaling connection
+      if (signaling && signaling.readyState === WebSocket.OPEN) {
+        signaling.close();
+        signaling = null;
+      }
+
+      // Reset video
+      if (videoElement.srcObject) {
+        const tracks = videoElement.srcObject.getTracks();
+        tracks.forEach(track => track.stop());
+        videoElement.srcObject = null;
+        currentStream = null;
+      }
+
+      // Reset UI
+      updateConnectionStatus('offline');
+      connectBtn.disabled = false;
+      disconnectBtn.disabled = true;
+      streamIdInput.disabled = false;
+      serverUrlInput.disabled = false;
+      statusText.textContent = 'Not connected';
+      statusOverlay.classList.remove('hidden');
+
+      // Reset stats
+      statBitrate.textContent = '0 kbps';
+      statResolution.textContent = '0x0';
+      statFramerate.textContent = '0 fps';
+      statLatency.textContent = '0 ms';
+      resolutionDetails.textContent = 'No resolution data available';
+      networkDetails.textContent = 'No network data available';
+
+      connected = false;
+      reconnectAttempts = 0;
+      lastIceConnectionState = null;
+      lastBytesReceived = { audio: 0, video: 0 };
+      lastTimestamp = 0;
+
+      log('Connection reset', 'info');
     }
-
-    // Close data channels
-    if (peerConnection.dataChannel) {
-      peerConnection.dataChannel.close();
-    }
-
-    // Close the connection
-    peerConnection.close();
-    peerConnection = null;
-  }
-
-  // Close signaling connection
-  if (signaling && signaling.readyState === WebSocket.OPEN) {
-    signaling.close();
-    signaling = null;
-  }
-
-  // Reset video
-  if (videoElement.srcObject) {
-    const tracks = videoElement.srcObject.getTracks();
-    tracks.forEach(track => track.stop());
-    videoElement.srcObject = null;
-    currentStream = null;
-  }
-
-  // Reset UI
-  updateConnectionStatus('offline');
-  connectBtn.disabled = false;
-  disconnectBtn.disabled = true;
-  streamIdInput.disabled = false;
-  serverUrlInput.disabled = false;
-  statusText.textContent = 'Not connected';
-  statusOverlay.classList.remove('hidden');
-
-  // Reset stats
-  statBitrate.textContent = '0 kbps';
-  statResolution.textContent = '0x0';
-  statFramerate.textContent = '0 fps';
-  statLatency.textContent = '0 ms';
-
-  connected = false;
-  reconnectAttempts = 0;
-  lastIceConnectionState = null;
-
-  log('Connection reset', 'info');
-}
 
     // Create WebRTC peer connection
     function createPeerConnection() {
@@ -638,177 +905,264 @@ function reconnect() {
         }
       };
 
+      // Handle ICE gathering state changes
+      peerConnection.onicegatheringstatechange = () => {
+        log(`ICE gathering state: ${peerConnection.iceGatheringState}`, 'info');
+      };
+
       // Handle ICE connection state changes
       peerConnection.oniceconnectionstatechange = () => {
-  const newState = peerConnection.iceConnectionState;
+        const newState = peerConnection.iceConnectionState;
 
-  if (newState !== lastIceConnectionState) {
-    log(`ICE connection state changed to: ${newState}`);
-    lastIceConnectionState = newState;
+        if (newState !== lastIceConnectionState) {
+          log(`ICE connection state changed to: ${newState}`);
+          lastIceConnectionState = newState;
 
-    switch (newState) {
-      case 'checking':
-        updateConnectionStatus('connecting');
-        statusText.textContent = 'Establishing connection...';
-        break;
+          switch (newState) {
+            case 'checking':
+              updateConnectionStatus('connecting');
+              statusText.textContent = 'Establishing connection...';
+              break;
 
-      case 'connected':
-      case 'completed':
-        if (!connected) {
-          connected = true;
-          updateConnectionStatus('online');
-          statusOverlay.classList.add('hidden');
-          log('Stream connected successfully!', 'success');
-          reconnectAttempts = 0;
-        }
-        break;
-
-      case 'disconnected':
-        // Temporary disconnection, might recover
-        if (connected) {
-          log('Connection temporarily disconnected, waiting to recover...', 'warning');
-          statusText.textContent = 'Connection interrupted, trying to recover...';
-          statusOverlay.classList.remove('hidden');
-
-          // Don't change connected state yet - might recover
-        }
-        break;
-
-      case 'failed':
-        if (connected) {
-          connected = false;
-          updateConnectionStatus('offline');
-          statusOverlay.classList.remove('hidden');
-          statusText.textContent = 'Connection failed';
-
-          log(`Connection failed`, 'error');
-
-          // Try to reconnect with exponential backoff
-          if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-            reconnectAttempts++;
-            const delayMs = Math.min(1000 * Math.pow(2, reconnectAttempts), 10000);
-
-            log(`Attempting to reconnect in ${delayMs/1000} seconds (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`, 'warning');
-
-            setTimeout(() => {
-              if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-                connect();
+            case 'connected':
+            case 'completed':
+              if (!connected) {
+                connected = true;
+                updateConnectionStatus('online');
+                log('Stream connected successfully!', 'success');
+                reconnectAttempts = 0;
               }
-            }, delayMs);
-          } else {
-            log('Maximum reconnection attempts reached', 'error');
-            resetConnection();
+              break;
+
+            case 'disconnected':
+              // Temporary disconnection, might recover
+              if (connected) {
+                log('Connection temporarily disconnected, waiting to recover...', 'warning');
+                statusText.textContent = 'Connection interrupted, trying to recover...';
+                statusOverlay.classList.remove('hidden');
+
+                // Don't change connected state yet - might recover
+              }
+              break;
+
+            case 'failed':
+              if (connected) {
+                connected = false;
+                updateConnectionStatus('offline');
+                statusOverlay.classList.remove('hidden');
+                statusText.textContent = 'Connection failed';
+
+                log(`Connection failed`, 'error');
+
+                // Try to reconnect with exponential backoff
+                if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                  reconnectAttempts++;
+                  const delayMs = Math.min(1000 * Math.pow(2, reconnectAttempts), 10000);
+
+                  log(`Attempting to reconnect in ${delayMs/1000} seconds (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`, 'warning');
+
+                  setTimeout(() => {
+                    if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                      connect();
+                    }
+                  }, delayMs);
+                } else {
+                  log('Maximum reconnection attempts reached', 'error');
+                  resetConnection();
+                }
+              }
+              break;
+
+            case 'closed':
+              if (connected) {
+                connected = false;
+                updateConnectionStatus('offline');
+                statusOverlay.classList.remove('hidden');
+                statusText.textContent = 'Connection closed';
+                log('Connection closed', 'info');
+              }
+              break;
           }
         }
-        break;
+      };
 
-      case 'closed':
-        if (connected) {
-          connected = false;
-          updateConnectionStatus('offline');
-          statusOverlay.classList.remove('hidden');
-          statusText.textContent = 'Connection closed';
-          log('Connection closed', 'info');
-        }
-        break;
-    }
-  }
-};
+      // Handle connection state changes
+      peerConnection.onconnectionstatechange = () => {
+        log(`Connection state changed to: ${peerConnection.connectionState}`, 'info');
+      };
 
-      // Handle track events
+      // Handle signaling state changes
+      peerConnection.onsignalingstatechange = () => {
+        log(`Signaling state changed to: ${peerConnection.signalingState}`, 'info');
+      };
+
+      // Handle negotiation needed
+      peerConnection.onnegotiationneeded = async () => {
+        log('Negotiation needed', 'info');
+
+        // We don't need to handle this automatically as we manage the offer/answer process ourselves
+      };
+
+      // Handle track events with improved error handling
       peerConnection.ontrack = event => {
-  log(`Received ${event.track.kind} track with ID: ${event.track.id}`, 'success');
+        log(`Received ${event.track.kind} track with ID: ${event.track.id}`, 'success');
 
-  // Log detailed track information
-  log(`Track info: ${event.track.kind}, enabled: ${event.track.enabled}, readyState: ${event.track.readyState}`, 'info');
+        // Update track received status
+        tracksReceived[event.track.kind] = true;
 
-  if (event.streams && event.streams[0]) {
-    log(`Stream received with ID: ${event.streams[0].id}`, 'success');
+        // Log detailed track information
+        log(`Track info: ${event.track.kind}, enabled: ${event.track.enabled}, readyState: ${event.track.readyState}`, 'info');
 
-    // Log all tracks in the stream
-    const trackInfo = event.streams[0].getTracks().map(track =>
-      `${track.kind}:${track.id} (${track.readyState})`).join(', ');
-    log(`Stream tracks: ${trackInfo}`, 'info');
+        if (event.streams && event.streams[0]) {
+          log(`Stream received with ID: ${event.streams[0].id}`, 'success');
 
-    // Set the stream to video element
-    videoElement.srcObject = event.streams[0];
-    currentStream = event.streams[0];
+          // Log all tracks in the stream
+          const trackInfo = event.streams[0].getTracks().map(track =>
+            `${track.kind}:${track.id} (${track.readyState})`).join(', ');
+          log(`Stream tracks: ${trackInfo}`, 'info');
 
-    // Make sure muted is false for testing audio
-    videoElement.muted = false;
+          // IMPORTANT: Set the stream to video element
+          if (!videoElement.srcObject) {
+            videoElement.srcObject = event.streams[0];
+            currentStream = event.streams[0];
 
-    // Add event listeners to debug video element
-    videoElement.onloadedmetadata = () => {
-      log('Video metadata loaded, dimensions: ' +
-        videoElement.videoWidth + 'x' + videoElement.videoHeight, 'success');
-    };
+            // Make sure video element is not muted for testing audio
+            videoElement.muted = false;
+            toggleMuteBtn.textContent = 'Mute';
 
-    videoElement.onloadeddata = () => {
-      log('Video data loaded, starting playback', 'success');
+            // Add event listeners for debugging
+            videoElement.onloadedmetadata = () => {
+              log('Video metadata loaded, dimensions: ' +
+                videoElement.videoWidth + 'x' + videoElement.videoHeight, 'success');
 
-      // Force play with user interaction simulation if needed
-      const playPromise = videoElement.play();
-
-      if (playPromise !== undefined) {
-        playPromise.then(() => {
-          log('Playback started successfully!', 'success');
-          // Hide overlay when playback actually starts
-          statusOverlay.classList.add('hidden');
-        }).catch(err => {
-          log(`Error playing video: ${err.message}`, 'error');
-
-          // If autoplay was prevented, we'll need user interaction
-          if (err.name === 'NotAllowedError') {
-            log('Autoplay prevented by browser. Click "Play" button to start', 'warning');
-
-            // Create play button overlay
-            const playButton = document.createElement('button');
-            playButton.textContent = 'Play Video';
-            playButton.className = 'btn btn-primary';
-            playButton.style.position = 'absolute';
-            playButton.style.top = '50%';
-            playButton.style.left = '50%';
-            playButton.style.transform = 'translate(-50%, -50%)';
-            playButton.style.zIndex = '20';
-
-            playButton.onclick = () => {
-              videoElement.play();
-              playButton.remove();
-              statusOverlay.classList.add('hidden');
+              // Update resolution stats
+              statResolution.textContent = `${videoElement.videoWidth}x${videoElement.videoHeight}`;
+              resolutionDetails.textContent = `Native resolution: ${videoElement.videoWidth}x${videoElement.videoHeight}\nDisplay size: ${Math.round(videoElement.clientWidth)}x${Math.round(videoElement.clientHeight)}`;
             };
 
-            // Show play button in overlay
-            statusText.textContent = 'Click to play';
-            statusOverlay.innerHTML = '';
-            statusOverlay.appendChild(playButton);
+            videoElement.onloadeddata = () => {
+              log('Video data loaded, starting playback', 'success');
+
+              // Force play with error handling
+              videoElement.play().catch(err => {
+                log(`Error playing video: ${err.message}`, 'error');
+
+                // If autoplay was prevented, show play button
+                if (err.name === 'NotAllowedError') {
+                  log('Autoplay prevented by browser. Click to play', 'warning');
+                  createPlayButton();
+                }
+              });
+            };
+          } else {
+            // If we already have a stream, add this track to it
+            const existingTrack = videoElement.srcObject.getTracks().find(t => t.kind === event.track.kind);
+            if (existingTrack) {
+              log(`Replacing existing ${event.track.kind} track`, 'info');
+              existingTrack.stop();
+            }
+
+            // Add the new track to the existing stream
+            try {
+              event.streams[0].getTracks().forEach(track => {
+                if (!videoElement.srcObject.getTracks().some(t => t.id === track.id)) {
+                  videoElement.srcObject.addTrack(track);
+                  log(`Added ${track.kind} track to existing stream`, 'success');
+                }
+              });
+            } catch (err) {
+              log(`Error adding track to stream: ${err.message}`, 'error');
+            }
           }
-        });
-      }
-    };
+        }
 
-    // Add error event handling
-    videoElement.onerror = (e) => {
-      log(`Video element error: ${videoElement.error.code} - ${videoElement.error.message}`, 'error');
-    };
+        // Monitor track events
+        event.track.onended = () => {
+          log(`Track ${event.track.kind} ended`, 'warning');
+        };
 
-    // Monitor track ended events
-    event.track.onended = () => {
-      log(`Track ${event.track.kind} ended`, 'warning');
-    };
+        event.track.onmute = () => {
+          log(`Track ${event.track.kind} muted`, 'info');
+        };
 
-    event.track.onmute = () => {
-      log(`Track ${event.track.kind} muted`, 'info');
-    };
+        event.track.onunmute = () => {
+          log(`Track ${event.track.kind} unmuted`, 'info');
+        };
 
-    event.track.onunmute = () => {
-      log(`Track ${event.track.kind} unmuted`, 'info');
-    };
-  } else {
-    log('Received track but no stream was attached', 'warning');
-  }
-};
+        // Hide overlay after a short delay if both audio and video tracks are received
+        if (tracksReceived.audio && tracksReceived.video) {
+          setTimeout(() => {
+            statusOverlay.classList.add('hidden');
+          }, 500);
+        }
+      };
+
+      // Add data channel event handlers
+      peerConnection.ondatachannel = event => {
+        log(`Data channel received: ${event.channel.label}`, 'success');
+
+        const dataChannel = event.channel;
+
+        dataChannel.onopen = () => {
+          log(`Data channel '${dataChannel.label}' opened`, 'success');
+        };
+
+        dataChannel.onclose = () => {
+          log(`Data channel '${dataChannel.label}' closed`, 'info');
+        };
+
+        dataChannel.onmessage = event => {
+          try {
+            const message = JSON.parse(event.data);
+            log(`Received message on data channel: ${message.type}`, 'info');
+
+            // Handle different message types
+            if (message.type === 'stream_info') {
+              // Update stream info in the UI
+              statResolution.textContent = message.resolution || '0x0';
+              statFramerate.textContent = `${message.frame_rate || 0} fps`;
+
+              // Add detailed info to tooltip
+              resolutionDetails.textContent = `Stream resolution: ${message.resolution || 'unknown'}\nFrame rate: ${message.frame_rate || 0} fps\nVideo codec: ${message.video_codec || 'unknown'}\nAudio codec: ${message.audio_codec || 'unknown'}`;
+
+              log(`Stream info received: ${message.resolution}, ${message.frame_rate} fps, ${message.video_codec}`, 'info');
+            }
+          } catch (err) {
+            log(`Error handling data channel message: ${err.message}`, 'error');
+          }
+        };
+      };
 
       log('WebRTC connection created');
+    }
+
+    // Function to create a play button overlay
+    function createPlayButton() {
+      // Create play button overlay
+      const playButton = document.createElement('button');
+      playButton.textContent = 'Play Video';
+      playButton.className = 'btn btn-primary';
+      playButton.style.position = 'absolute';
+      playButton.style.top = '50%';
+      playButton.style.left = '50%';
+      playButton.style.transform = 'translate(-50%, -50%)';
+      playButton.style.zIndex = '20';
+
+      playButton.onclick = () => {
+        videoElement.play().then(() => {
+          log('Playback started by user interaction', 'success');
+          playButton.remove();
+          statusOverlay.classList.add('hidden');
+        }).catch(err => {
+          log(`Failed to play after user interaction: ${err.message}`, 'error');
+        });
+      };
+
+      // Show play button in overlay
+      statusText.textContent = 'Click to play';
+      statusOverlay.innerHTML = '';
+      statusOverlay.appendChild(playButton);
+      statusOverlay.classList.remove('hidden');
     }
 
     // Connect to signaling server
@@ -824,7 +1178,7 @@ function reconnect() {
 
           // Set timeout for connection
           const connectionTimeout = setTimeout(() => {
-            if (signaling.readyState !== WebSocket.OPEN) {
+            if (signaling && signaling.readyState !== WebSocket.OPEN) {
               reject(new Error('Connection to signaling server timed out'));
               signaling.close();
             }
@@ -901,9 +1255,10 @@ function reconnect() {
         log('Setting local description...');
         await peerConnection.setLocalDescription(offer);
 
+        // Save offer for debugging
+        lastSdpOffer = offer.sdp;
+
         // Send offer to signaling server
-        // Important: We send only the raw SDP without wrapping in JSON.stringify
-        // This is critical to prevent the double-escaping that causes SDP errors
         sendSignalingMessage('offer', {
           sdp: offer.sdp
         });
@@ -943,278 +1298,219 @@ function reconnect() {
       }
     }
 
-    // Improved signaling message handler for client-side code
+    // Handle incoming signaling messages
+    async function handleSignalingMessage(message) {
+      try {
+        console.log("Processing message type:", message.type);
 
-// Replace the entire handleSignalingMessage function in test.html
+        switch (message.type) {
+          case "answer":
+            log('Received SDP answer');
 
-// Handle incoming signaling messages
-async function handleSignalingMessage(message) {
-  try {
-    console.log("Processing message type:", message.type);
+            // Parse answer payload - handle various formats
+            let answerData;
 
-    switch (message.type) {
-      case "answer":
-        log('Received SDP answer');
-
-        // Parse answer payload - handle various formats
-        let answerData;
-
-        // First check if the payload is a string (could be JSON string or base64)
-        if (typeof message.payload === 'string') {
-          // Check if it's base64 encoded (starts with 'ey')
-          if (message.payload.startsWith('ey')) {
-            try {
-              // Try to decode as base64
-              const decoded = atob(message.payload);
-              console.log('Decoded base64 answer payload:', decoded);
-              try {
-                answerData = JSON.parse(decoded);
-              } catch (parseErr) {
-                console.error('Error parsing decoded base64:', parseErr);
-                answerData = { sdp: decoded };
+            // First check if the payload is a string (could be JSON string or base64)
+            if (typeof message.payload === 'string') {
+              // Check if it's base64 encoded (starts with 'ey')
+              if (message.payload.startsWith('ey')) {
+                try {
+                  // Try to decode as base64
+                  const decoded = atob(message.payload);
+                  console.log('Decoded base64 answer payload:', decoded);
+                  try {
+                    answerData = JSON.parse(decoded);
+                  } catch (parseErr) {
+                    console.error('Error parsing decoded base64:', parseErr);
+                    answerData = { sdp: decoded };
+                  }
+                } catch (decodeErr) {
+                  console.error('Base64 decoding failed:', decodeErr);
+                  // If base64 decoding fails, try to parse as JSON string
+                  try {
+                    answerData = JSON.parse(message.payload);
+                  } catch (jsonErr) {
+                    console.error('JSON parsing failed:', jsonErr);
+                    // If that fails too, use it directly as SDP
+                    answerData = { sdp: message.payload };
+                  }
+                }
+              } else {
+                // Not base64, try parsing as JSON string
+                try {
+                  answerData = JSON.parse(message.payload);
+                } catch (jsonErr) {
+                  console.error('JSON parsing failed:', jsonErr);
+                  // If that fails, it might be SDP directly
+                  answerData = { sdp: message.payload };
+                }
               }
-            } catch (decodeErr) {
-              console.error('Base64 decoding failed:', decodeErr);
-              // If base64 decoding fails, try to parse as JSON string
-              try {
-                answerData = JSON.parse(message.payload);
-              } catch (jsonErr) {
-                console.error('JSON parsing failed:', jsonErr);
-                // If that fails too, use it directly as SDP
-                answerData = { sdp: message.payload };
-              }
+            } else if (typeof message.payload === 'object') {
+              // It's already an object, use it directly
+              answerData = message.payload;
+            } else {
+              throw new Error(`Unsupported payload type: ${typeof message.payload}`);
             }
-          } else {
-            // Not base64, try parsing as JSON string
-            try {
-              answerData = JSON.parse(message.payload);
-            } catch (jsonErr) {
-              console.error('JSON parsing failed:', jsonErr);
-              // If that fails, it might be SDP directly
-              answerData = { sdp: message.payload };
+
+            // Ensure we have a valid SDP
+            if (!answerData.sdp) {
+              console.error('No SDP found in answer data:', answerData);
+              throw new Error('Answer payload missing SDP');
             }
-          }
-        } else if (typeof message.payload === 'object') {
-          // It's already an object, use it directly
-          answerData = message.payload;
-        } else {
-          throw new Error(`Unsupported payload type: ${typeof message.payload}`);
-        }
 
-        // Ensure we have a valid SDP
-        if (!answerData.sdp) {
-          console.error('No SDP found in answer data:', answerData);
-          throw new Error('Answer payload missing SDP');
-        }
+            console.log('Parsed SDP answer data:', answerData);
 
-        console.log('Parsed SDP answer data:', answerData);
+            // Save answer for debugging
+            lastSdpAnswer = answerData.sdp;
 
-        // Create SDP answer
-        const answer = new RTCSessionDescription({
-          type: 'answer',
-          sdp: answerData.sdp
-        });
+            // Create SDP answer
+            const answer = new RTCSessionDescription({
+              type: 'answer',
+              sdp: answerData.sdp
+            });
 
-        // Set remote description
-        await peerConnection.setRemoteDescription(answer);
-        log('Remote description set');
-        break;
+            // Set remote description
+            await peerConnection.setRemoteDescription(answer);
+            log('Remote description set');
+            break;
 
-      case "ice_candidate":
-        log('Received ICE candidate');
+          case "ice_candidate":
+            log('Received ICE candidate');
 
-        // Parse payload
-        let candidateData;
-        if (typeof message.payload === 'string') {
-          // Try parsing as JSON string
-          try {
-            candidateData = JSON.parse(message.payload);
-          } catch (err) {
-            // Check if it might be base64 encoded
-            if (message.payload.startsWith('ey')) {
+            // Parse payload
+            let candidateData;
+            if (typeof message.payload === 'string') {
+              // Try parsing as JSON string
               try {
-                const decoded = atob(message.payload);
-                candidateData = JSON.parse(decoded);
-              } catch (decodeErr) {
-                throw new Error(`Failed to decode ICE candidate: ${decodeErr.message}`);
+                candidateData = JSON.parse(message.payload);
+              } catch (err) {
+                // Check if it might be base64 encoded
+                if (message.payload.startsWith('ey')) {
+                  try {
+                    const decoded = atob(message.payload);
+                    candidateData = JSON.parse(decoded);
+                  } catch (decodeErr) {
+                    throw new Error(`Failed to decode ICE candidate: ${decodeErr.message}`);
+                  }
+                } else {
+                  throw new Error(`Failed to parse ICE candidate: ${err.message}`);
+                }
               }
             } else {
-              throw new Error(`Failed to parse ICE candidate: ${err.message}`);
+              // It's already an object
+              candidateData = message.payload;
+            }
+
+            // Create and add ICE candidate
+            const candidate = new RTCIceCandidate({
+              candidate: candidateData.candidate,
+              sdpMid: candidateData.sdpMid,
+              sdpMLineIndex: candidateData.sdpMLineIndex
+            });
+
+            await peerConnection.addIceCandidate(candidate);
+            log('ICE candidate added');
+            break;
+
+          case "error":
+            handleErrorMessage(message);
+            break;
+
+          case "pong":
+            // Received pong (keep-alive response)
+            break;
+
+          case "stream_ended":
+            log('Stream has ended', 'warning');
+            disconnect();
+            break;
+
+          default:
+            log(`Received unknown message type: ${message.type}`, 'warning');
+            break;
+        }
+      } catch (error) {
+        log(`Error handling message: ${error.message}`, 'error');
+        console.error("Message that caused error:", message);
+      }
+    }
+
+    // Handle error messages with base64 decoding support
+    function handleErrorMessage(message) {
+      try {
+        // Try to determine the format of the payload
+        let errorData;
+        let payloadStr = '';
+
+        if (typeof message.payload === 'string') {
+          payloadStr = message.payload;
+        } else {
+          // Try to convert to string if it's not already
+          payloadStr = JSON.stringify(message.payload);
+        }
+
+        // Check if payload might be base64 encoded (starts with eyJ which is base64 for '{')
+        if (payloadStr.startsWith('eyJ')) {
+          try {
+            // Try to decode as base64
+            const decoded = atob(payloadStr);
+            log(`Decoded base64 payload: ${decoded}`, 'info');
+
+            // Parse the decoded JSON
+            errorData = JSON.parse(decoded);
+          } catch (decodeErr) {
+            // If base64 decoding fails, just continue with original payload
+            log(`Base64 decoding failed: ${decodeErr.message}`, 'warning');
+          }
+        }
+
+        // If we don't have error data yet, try parsing directly
+        if (!errorData) {
+          try {
+            errorData = JSON.parse(payloadStr);
+          } catch (parseErr) {
+            // If that fails, check if it might be a non-JSON string
+            if (typeof payloadStr === 'string') {
+              errorData = { message: payloadStr };
+            } else {
+              throw parseErr;
             }
           }
-        } else {
-          // It's already an object
-          candidateData = message.payload;
         }
 
-        // Create and add ICE candidate
-        const candidate = new RTCIceCandidate({
-          candidate: candidateData.candidate,
-          sdpMid: candidateData.sdpMid,
-          sdpMLineIndex: candidateData.sdpMLineIndex
-        });
+        log(`Connection error: ${errorData.message || 'Unknown error'}`, 'error');
 
-        await peerConnection.addIceCandidate(candidate);
-        log('ICE candidate added');
-        break;
+        // Update UI to reflect the error
+        updateConnectionStatus('offline');
+        statusText.textContent = errorData.message || 'Connection error';
+        statusOverlay.classList.remove('hidden');
 
-      case "error":
-        handleErrorMessage(message);
-        break;
+        // Handle specific error types
+        switch(errorData.code) {
+          case "service_unavailable":
+            setTimeout(() => {
+              log("Attempting to reconnect...", 'info');
+              reconnect();
+            }, 5000);
+            break;
 
-      case "pong":
-        // Received pong (keep-alive response)
-        break;
+          case "offer_rejected":
+            log("Connection was rejected, please try again later", 'error');
+            break;
 
-      case "stream_ended":
-        log('Stream has ended', 'warning');
-        disconnect();
-        break;
+          case "invalid_offer":
+            log("Invalid connection request", 'error');
+            break;
 
-      default:
-        log(`Received unknown message type: ${message.type}`, 'warning');
-        break;
-    }
-  } catch (error) {
-    log(`Error handling message: ${error.message}`, 'error');
-    console.error("Message that caused error:", message);
-  }
-}
-// Handle error messages with base64 decoding support
-function handleErrorMessage(message) {
-  try {
-    // Try to determine the format of the payload
-    let errorData;
-    let payloadStr = '';
-
-    if (typeof message.payload === 'string') {
-      payloadStr = message.payload;
-    } else {
-      // Try to convert to string if it's not already
-      payloadStr = JSON.stringify(message.payload);
-    }
-
-    // Check if payload might be base64 encoded (starts with eyJ which is base64 for '{')
-    if (payloadStr.startsWith('eyJ')) {
-      try {
-        // Try to decode as base64
-        const decoded = atob(payloadStr);
-        log(`Decoded base64 payload: ${decoded}`, 'info');
-
-        // Parse the decoded JSON
-        errorData = JSON.parse(decoded);
-      } catch (decodeErr) {
-        // If base64 decoding fails, just continue with original payload
-        log(`Base64 decoding failed: ${decodeErr.message}`, 'warning');
-      }
-    }
-
-    // If we don't have error data yet, try parsing directly
-    if (!errorData) {
-      try {
-        errorData = JSON.parse(payloadStr);
-      } catch (parseErr) {
-        // If that fails, check if it might be a non-JSON string
-        if (typeof payloadStr === 'string') {
-          errorData = { message: payloadStr };
-        } else {
-          throw parseErr;
+          default:
+            // Generic handling for other error types
+            break;
         }
+      } catch (err) {
+        // If we can't parse the error payload, log that error
+        log(`Error parsing error message: ${err.message}`, 'error');
+        console.error("Original error payload:", message.payload);
       }
-    }
-
-    log(`Connection error: ${errorData.message || 'Unknown error'}`, 'error');
-
-    // Update UI to reflect the error
-    updateConnectionStatus('offline');
-    statusText.textContent = errorData.message || 'Connection error';
-    statusOverlay.classList.remove('hidden');
-
-    // Handle specific error types
-    switch(errorData.code) {
-      case "service_unavailable":
-        setTimeout(() => {
-          log("Attempting to reconnect...", 'info');
-          reconnect();
-        }, 5000);
-        break;
-
-      case "offer_rejected":
-        log("Connection was rejected, please try again later", 'error');
-        break;
-
-      case "invalid_offer":
-        log("Invalid connection request", 'error');
-        break;
-
-      default:
-        // Generic handling for other error types
-        break;
-    }
-  } catch (err) {
-    // If we can't parse the error payload, log that error
-    log(`Error parsing error message: ${err.message}`, 'error');
-    console.error("Original error payload:", message.payload);
-  }
-}
-
-function checkMediaStatus() {
-  if (currentStream) {
-    const videoTracks = currentStream.getVideoTracks();
-    const audioTracks = currentStream.getAudioTracks();
-
-    log(`Current stream has ${videoTracks.length} video and ${audioTracks.length} audio tracks`, 'info');
-
-    videoTracks.forEach(track => {
-      log(`Video track: enabled=${track.enabled}, muted=${track.muted}, readyState=${track.readyState}`, 'info');
-    });
-
-    audioTracks.forEach(track => {
-      log(`Audio track: enabled=${track.enabled}, muted=${track.muted}, readyState=${track.readyState}`, 'info');
-    });
-
-    // Check video element state
-    log(`Video element: paused=${videoElement.paused}, ended=${videoElement.ended}, ` +
-        `readyState=${videoElement.readyState}, networkState=${videoElement.networkState}`, 'info');
-
-    if (videoElement.srcObject) {
-      log('Video element has a valid srcObject', 'success');
-    } else {
-      log('Video element srcObject is null or undefined', 'error');
-    }
-  } else {
-    log('No current stream available', 'warning');
-  }
-}
-
-const mediaButton = document.createElement('button');
-mediaButton.textContent = 'Check Media';
-mediaButton.className = 'btn btn-primary';
-mediaButton.style.marginLeft = '10px';
-mediaButton.onclick = checkMediaStatus;
-
-// Add to controls
-document.querySelector('.btn-actions').appendChild(mediaButton);
-
-// Add event listener for video playing events
-videoElement.addEventListener('playing', () => {
-  log('Video is now playing!', 'success');
-  // Update UI to reflect playback
-  updateConnectionStatus('online');
-  statusOverlay.classList.add('hidden');
-});
-    // Reconnection function
-    function reconnect() {
-      // Reset connection if needed
-      if (peerConnection && peerConnection.signalingState !== 'closed') {
-        peerConnection.close();
-      }
-
-      // Re-create peer connection
-      createPeerConnection();
-
-      // Start connection process again
-      connect();
     }
 
     // Start sending periodic pings to keep connection alive
@@ -1238,6 +1534,9 @@ videoElement.addEventListener('playing', () => {
         clearInterval(statsInterval);
       }
 
+      lastTimestamp = Date.now();
+      lastBytesReceived = { audio: 0, video: 0 };
+
       statsInterval = setInterval(async () => {
         if (!peerConnection || !connected) return;
 
@@ -1260,57 +1559,103 @@ videoElement.addEventListener('playing', () => {
 
     // Update stream statistics display
     function updateStats(stats) {
-      let bitrate = 0;
+      let videoBitrate = 0;
+      let audioBitrate = 0;
       let width = 0;
       let height = 0;
       let frameRate = 0;
+      let packetsLost = 0;
+      let packetsReceived = 0;
+      let jitter = 0;
       let rtt = 0;
+      let currentTimestamp = Date.now();
+      let timeDelta = (currentTimestamp - lastTimestamp) / 1000; // Convert to seconds
+
+      // Reset if time delta is too large (browser tab was inactive)
+      if (timeDelta > 5) {
+        timeDelta = 1;
+        lastBytesReceived = { audio: 0, video: 0 };
+      }
 
       // Process all stats
       stats.forEach(stat => {
         if (stat.type === 'inbound-rtp' && stat.kind === 'video') {
-          // Calculate bitrate
-          if (stat.bytesReceived && stat.timestamp) {
-            if (stat._previousBytesReceived && stat._previousTimestamp) {
-              const bytesReceived = stat.bytesReceived - stat._previousBytesReceived;
-              const timeDiff = stat.timestamp - stat._previousTimestamp;
-
-              if (timeDiff > 0) {
-                bitrate = Math.floor((bytesReceived * 8) / (timeDiff / 1000));
-              }
+          // Calculate video bitrate
+          if (stat.bytesReceived !== undefined) {
+            const bytes = stat.bytesReceived - (lastBytesReceived.video || 0);
+            if (bytes >= 0 && timeDelta > 0) { // Protect against negative values
+              videoBitrate = Math.floor((bytes * 8) / timeDelta);
             }
-
-            // Store values for next calculation
-            stat._previousBytesReceived = stat.bytesReceived;
-            stat._previousTimestamp = stat.timestamp;
+            lastBytesReceived.video = stat.bytesReceived;
           }
 
-          // Get frame rate
-          if (stat.framesPerSecond) {
-            frameRate = Math.round(stat.framesPerSecond);
+          // Get frame rate and packet stats
+          if (stat.framesPerSecond !== undefined) {
+            frameRate = Math.round(stat.framesPerSecond * 10) / 10; // Round to 1 decimal place
+          }
+
+          if (stat.packetsLost !== undefined) {
+            packetsLost = stat.packetsLost;
+          }
+
+          if (stat.packetsReceived !== undefined) {
+            packetsReceived = stat.packetsReceived;
+          }
+
+          if (stat.jitter !== undefined) {
+            jitter = Math.round(stat.jitter * 1000); // Convert to ms
+          }
+        }
+
+        if (stat.type === 'inbound-rtp' && stat.kind === 'audio') {
+          // Calculate audio bitrate
+          if (stat.bytesReceived !== undefined) {
+            const bytes = stat.bytesReceived - (lastBytesReceived.audio || 0);
+            if (bytes >= 0 && timeDelta > 0) {
+              audioBitrate = Math.floor((bytes * 8) / timeDelta);
+            }
+            lastBytesReceived.audio = stat.bytesReceived;
           }
         }
 
         // Get video dimensions
         if (stat.type === 'track' && stat.kind === 'video') {
-          width = stat.frameWidth || 0;
-          height = stat.frameHeight || 0;
+          if (stat.frameWidth && stat.frameHeight) {
+            width = stat.frameWidth;
+            height = stat.frameHeight;
+          }
         }
 
         // Get RTT (round-trip time)
-        if (stat.type === 'remote-inbound-rtp') {
-          rtt = stat.roundTripTime ? Math.floor(stat.roundTripTime * 1000) : 0;
+        if (stat.type === 'remote-inbound-rtp' || stat.type === 'remote-outbound-rtp') {
+          if (stat.roundTripTime !== undefined) {
+            rtt = Math.floor(stat.roundTripTime * 1000); // Convert to ms
+          }
         }
       });
 
+      // Update timestamp for next calculation
+      lastTimestamp = currentTimestamp;
+
       // Update UI
-      if (bitrate > 0) {
-        const kbps = Math.floor(bitrate / 1000);
-        statBitrate.textContent = `${kbps} kbps`;
+      const totalBitrate = videoBitrate + audioBitrate;
+      let bitrateText;
+
+      if (totalBitrate > 1000000) {
+        bitrateText = `${(totalBitrate / 1000000).toFixed(2)} Mbps`;
+      } else {
+        bitrateText = `${Math.floor(totalBitrate / 1000)} kbps`;
       }
+
+      statBitrate.textContent = bitrateText;
 
       if (width > 0 && height > 0) {
         statResolution.textContent = `${width}x${height}`;
+
+        // Update resolution details tooltip
+        const displayWidth = videoElement.clientWidth;
+        const displayHeight = videoElement.clientHeight;
+        resolutionDetails.textContent = `Stream resolution: ${width}x${height}\nDisplay size: ${displayWidth}x${displayHeight}\nScale factor: ${(displayWidth/width).toFixed(2)}x`;
       }
 
       if (frameRate > 0) {
@@ -1319,6 +1664,10 @@ videoElement.addEventListener('playing', () => {
 
       if (rtt > 0) {
         statLatency.textContent = `${rtt} ms`;
+
+        // Update network details tooltip
+        const packetLossRate = packetsReceived > 0 ? (packetsLost / (packetsReceived + packetsLost) * 100).toFixed(2) : 0;
+        networkDetails.textContent = `Round-trip time: ${rtt} ms\nJitter: ${jitter} ms\nPacket loss: ${packetLossRate}%\nVideo bitrate: ${(videoBitrate/1000).toFixed(1)} kbps\nAudio bitrate: ${(audioBitrate/1000).toFixed(1)} kbps`;
       }
     }
 
@@ -1372,6 +1721,42 @@ videoElement.addEventListener('playing', () => {
       logContainer.innerHTML = '';
       log('Log cleared');
     }
+
+    // Add this function for detailed WebRTC stats logging
+    async function logDetailedStats() {
+      if (!peerConnection) return;
+
+      try {
+        const stats = await peerConnection.getStats();
+        let inboundStats = null;
+        let codecStats = null;
+
+        stats.forEach(stat => {
+          if (stat.type === 'inbound-rtp' && stat.kind === 'video') {
+            inboundStats = stat;
+          } else if (stat.type === 'codec' && stat.mimeType &&
+                    stat.mimeType.toLowerCase().includes('video')) {
+            codecStats = stat;
+          }
+        });
+
+        if (inboundStats) {
+          log(`Video stats: received=${inboundStats.bytesReceived}, ` +
+              `packets=${inboundStats.packetsReceived}, ` +
+              `lost=${inboundStats.packetsLost}, ` +
+              `frames=${inboundStats.framesDecoded}`, 'info');
+        }
+
+        if (codecStats) {
+          log(`Codec: ${codecStats.mimeType}, payload=${codecStats.payloadType}`, 'info');
+        }
+      } catch (e) {
+        log(`Stats error: ${e.message}`, 'error');
+      }
+    }
+
+    // Call detailed stats logging every 5 seconds
+    setInterval(logDetailedStats, 5000);
   </script>
 </body>
 </html>

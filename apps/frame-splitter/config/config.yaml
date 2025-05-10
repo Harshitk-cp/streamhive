@@ -69,7 +69,7 @@ routing:
     priority: 2
 
   webrtc_out:
-    address: "webrtc-service:9094"
+    address: "webrtc-out:50053"
     enabled: true
     filter: "frame.type == VIDEO"
     batch_size: 1
