@@ -155,7 +155,7 @@ func (f *FrameForwarder) flushBatch(streamID string) error {
 		return err
 	}
 
-	log.Printf("Forwarded batch of %d frames for stream %s", len(batch), streamID)
+	// log.Printf("Forwarded batch of %d frames for stream %s", len(batch), streamID)
 	return nil
 }
 

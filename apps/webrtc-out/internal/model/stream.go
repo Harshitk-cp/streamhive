@@ -86,9 +86,13 @@ type Viewer struct {
 	Status         StreamStatus
 	StartTime      time.Time
 	LastActivity   time.Time
-	TotalBytes     int64
-	Stats          ViewerStats
 	StreamID       string
+	TotalBytes     int64
+	Mutex          sync.RWMutex
+	Stats          ViewerStats
+	// track references
+	AudioTrack *webrtc.TrackLocalStaticSample
+	VideoTrack *webrtc.TrackLocalStaticSample
 }
 
 // ViewerStats represents statistics for a viewer connection

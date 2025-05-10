@@ -6,9 +6,11 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Harshitk-cp/streamhive/apps/frame-splitter/internal/model"
 	"github.com/Harshitk-cp/streamhive/libs/proto/webrtc"
+	webrtcpb "github.com/Harshitk-cp/streamhive/libs/proto/webrtc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -33,12 +35,12 @@ func NewWebRTCClient(address string) (*WebRTCClient, error) {
 
 // Send sends a batch of frames to the WebRTC service
 func (c *WebRTCClient) Send(ctx context.Context, batch model.FrameBatch) error {
+	log.Printf("Frame Splitter: Sending frame batch to WebRTC out: stream=%s, frames=%d",
+		batch.StreamID, len(batch.Frames))
+
 	// Process all frames
 	wg := sync.WaitGroup{}
 	errors := make(chan error, len(batch.Frames))
-
-	log.Printf("Frame Splitter: Sending frame batch to WebRTC out: stream=%s, frames=%d",
-		batch.StreamID, len(batch.Frames))
 
 	for _, frame := range batch.Frames {
 		wg.Add(1)
@@ -46,20 +48,24 @@ func (c *WebRTCClient) Send(ctx context.Context, batch model.FrameBatch) error {
 			defer wg.Done()
 
 			// Determine frame type
-			var frameType webrtc.FrameType
+			var frameType webrtcpb.FrameType
 			switch f.Type {
 			case model.FrameTypeVideo:
-				frameType = webrtc.FrameType_VIDEO
+				frameType = webrtcpb.FrameType_VIDEO
 			case model.FrameTypeAudio:
-				frameType = webrtc.FrameType_AUDIO
+				frameType = webrtcpb.FrameType_AUDIO
 			case model.FrameTypeMetadata:
-				frameType = webrtc.FrameType_METADATA
+				frameType = webrtcpb.FrameType_METADATA
 			default:
-				frameType = webrtc.FrameType_UNKNOWN
+				frameType = webrtcpb.FrameType_UNKNOWN
 			}
 
+			// Log the frame type and size
+			log.Printf("Sending %s frame to WebRTC Out: size=%d bytes, keyframe=%v",
+				f.Type, len(f.Data), f.IsKeyFrame)
+
 			// Create frame request
-			req := &webrtc.PushFrameRequest{
+			req := &webrtcpb.PushFrameRequest{
 				StreamId:   f.StreamID,
 				FrameId:    f.FrameID,
 				Type:       frameType,
@@ -70,10 +76,18 @@ func (c *WebRTCClient) Send(ctx context.Context, batch model.FrameBatch) error {
 				Metadata:   f.Metadata,
 			}
 
-			_, err := c.client.PushFrame(ctx, req)
+			// Add timeout
+			reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+
+			resp, err := c.client.PushFrame(reqCtx, req)
 			if err != nil {
+				log.Printf("Error sending frame to WebRTC: %v", err)
 				errors <- fmt.Errorf("failed to send frame to WebRTC: %w", err)
+				return
 			}
+
+			log.Printf("Successfully sent frame to WebRTC, response: %s", resp.Status)
 		}(frame)
 	}
 

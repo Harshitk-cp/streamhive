@@ -159,7 +159,6 @@ func main() {
 	}
 
 	// Connect to WebRTC service if enabled
-	// Connect to WebRTC service if enabled
 	if cfg.Routing.WebRTCOut.Enabled {
 		log.Printf("Connecting to WebRTC service at %s", cfg.Routing.WebRTCOut.Address)
 		webrtcClient, err := transport.NewWebRTCClient(cfg.Routing.WebRTCOut.Address)
