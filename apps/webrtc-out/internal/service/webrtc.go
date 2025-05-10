@@ -694,19 +694,16 @@ func (s *WebRTCService) processFrames(streamID string) {
 
 // broadcastVideoSample broadcasts a video sample to all viewers of a stream
 func (s *WebRTCService) broadcastVideoSample(streamID string, sample *media.Sample) {
-	// Track metrics
-	startTime := time.Now()
-	sampleSize := len(sample.Data)
-
-	// Debug log the sample data (first 10 bytes)
-	if sampleSize > 0 {
-		prefix := sample.Data
-		if len(prefix) > 10 {
-			prefix = prefix[:10]
-		}
-		log.Printf("DEBUG: Video sample first bytes: %v", prefix)
+	// Debug log for video sample
+	if len(sample.Data) > 0 {
+		// log.Printf("DEBUG: Video sample: stream=%s, size=%d bytes, first bytes=%v",
+		// 	streamID, len(sample.Data), sample.Data[:util.Min(8, len(sample.Data))])
+	} else {
+		log.Printf("WARNING: Empty video sample for stream %s", streamID)
+		return // Skip empty samples
 	}
 
+	// Check for viewers
 	s.streamsMutex.RLock()
 	stream, exists := s.streams[streamID]
 	if !exists {
@@ -714,73 +711,48 @@ func (s *WebRTCService) broadcastVideoSample(streamID string, sample *media.Samp
 		log.Printf("Error: Stream %s not found for video sample", streamID)
 		return
 	}
-
-	viewerCount := len(stream.Viewers)
 	s.streamsMutex.RUnlock()
 
+	// Check if there are any viewers
+	stream.Mutex.RLock() // Now uses RWMutex properly
+	viewerCount := len(stream.Viewers)
+	stream.Mutex.RUnlock()
+
 	if viewerCount == 0 {
-		return // No viewers, don't log
-	}
-
-	log.Printf("Broadcasting video sample: stream=%s, size=%d bytes, viewers=%d",
-		streamID, sampleSize, viewerCount)
-
-	// Track success/failure for each viewer
-	successCount := 0
-	failureCount := 0
-
-	// Get all active viewers with minimal lock time
-	s.streamsMutex.RLock()
-	stream, exists = s.streams[streamID]
-	if !exists {
-		s.streamsMutex.RUnlock()
+		// No viewers, silently return
 		return
 	}
 
-	// Process each viewer
+	// Log that we're broadcasting
+	// log.Printf("Broadcasting video sample: stream=%s, size=%d bytes to %d viewers",
+	// 	streamID, len(sample.Data), viewerCount)
+
+	// Track success/failure
+	successCount := 0
+	failureCount := 0
+
+	// Process viewers
+	stream.Mutex.RLock()
 	for viewerID, viewer := range stream.Viewers {
-		if viewer.Status == model.StreamStatusActive {
-			pc := viewer.PeerConnection
-			if pc == nil {
-				continue
-			}
-
-			// Find video track sender
-			senders := pc.GetSenders()
-			for _, sender := range senders {
-				if sender.Track() == nil || sender.Track().Kind() != webrtc.RTPCodecTypeVideo {
-					continue
-				}
-
-				track, ok := sender.Track().(*webrtc.TrackLocalStaticSample)
-				if !ok {
-					log.Printf("Error: Track for viewer %s is not TrackLocalStaticSample", viewerID)
-					continue
-				}
-
-				// Write sample with detailed error handling
-				if err := track.WriteSample(*sample); err != nil {
-					failureCount++
-					log.Printf("Error writing video sample to viewer %s: %v", viewerID, err)
-				} else {
-					successCount++
-					// Update stats
-					viewer.TotalBytes += int64(sampleSize)
-					viewer.Stats.VideoBytesSent += int64(sampleSize)
-					viewer.Stats.VideoPacketsSent++
-				}
-				break
+		if viewer.Status == model.StreamStatusActive && viewer.VideoTrack != nil {
+			if err := viewer.VideoTrack.WriteSample(*sample); err != nil {
+				log.Printf("Error writing video to viewer %s: %v", viewerID, err)
+				failureCount++
+			} else {
+				successCount++
+				viewer.TotalBytes += int64(len(sample.Data))
+				viewer.Stats.VideoBytesSent += int64(len(sample.Data))
+				viewer.Stats.VideoPacketsSent++
 			}
 		}
 	}
-	s.streamsMutex.RUnlock()
+	stream.Mutex.RUnlock()
 
 	// Log delivery stats
 	if successCount > 0 || failureCount > 0 {
-		log.Printf("Video delivery stats: success=%d, failure=%d, rate=%.1f%%, took=%dms",
+		log.Printf("Video delivery stats: success=%d, failure=%d, success_rate=%.1f%%",
 			successCount, failureCount,
-			float64(successCount)/float64(successCount+failureCount)*100,
-			time.Since(startTime).Milliseconds())
+			float64(successCount)/float64(successCount+failureCount)*100)
 	}
 }
 

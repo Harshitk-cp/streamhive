@@ -2,6 +2,7 @@ package processor
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 
@@ -27,7 +28,37 @@ func NewRTMPHandler(processor *FrameProcessor, metricsCollector metrics.Collecto
 func (h *RTMPHandler) HandleVideoFrame(ctx context.Context, streamID string, frameID string, data []byte, timestamp time.Time, isKeyFrame bool, sequence int64, metadata map[string]string) error {
 	startTime := time.Now()
 
-	// Create frame
+	// Validate video data
+	if len(data) == 0 {
+		h.metricsCollector.ErrorOccurred(streamID, "empty_video_frame")
+		log.Printf("Received empty video frame for stream %s", streamID)
+		return fmt.Errorf("empty video frame")
+	}
+
+	// Ensure metadata contains necessary values
+	if metadata == nil {
+		metadata = make(map[string]string)
+	}
+
+	// ALWAYS set the codec to h264 for WebRTC compatibility
+	metadata["codec"] = "h264"
+
+	// Set default metadata values if not present
+	if _, ok := metadata["width"]; !ok {
+		metadata["width"] = "1280" // Default width if not specified
+	}
+	if _, ok := metadata["height"]; !ok {
+		metadata["height"] = "720" // Default height if not specified
+	}
+
+	// Log the first few bytes of the video data for debugging
+	dataPrefix := data
+	if len(dataPrefix) > 16 {
+		dataPrefix = dataPrefix[:16]
+	}
+	log.Printf("Video frame data (first %d bytes): %v", len(dataPrefix), dataPrefix)
+
+	// Create frame with enhanced metadata
 	frame := model.Frame{
 		StreamID:   streamID,
 		FrameID:    frameID,
@@ -47,8 +78,8 @@ func (h *RTMPHandler) HandleVideoFrame(ctx context.Context, streamID string, fra
 	}
 
 	// Log frame processing
-	log.Printf("Processed video frame %s for stream %s: destinations=%v, took=%v",
-		frameID, streamID, result.Destinations, time.Since(startTime))
+	log.Printf("Processed video frame %s for stream %s: size=%d bytes, keyframe=%v, destinations=%v, took=%v",
+		frameID, streamID, len(data), isKeyFrame, result.Destinations, time.Since(startTime))
 
 	// Update metrics
 	h.metricsCollector.FrameProcessed(streamID, string(model.FrameTypeVideo), time.Since(startTime), true)

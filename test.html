@@ -478,17 +478,21 @@
     const resolutionDetails = document.getElementById('resolutionDetails');
     const networkDetails = document.getElementById('networkDetails');
 
-    // WebRTC Configuration
-    const webrtcConfig = {
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' }
-      ],
-      iceTransportPolicy: 'all',
-      bundlePolicy: 'max-bundle',
-      rtcpMuxPolicy: 'require',
-      sdpSemantics: 'unified-plan'
-    };
+const webrtcConfig = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' }
+    // You might need a TURN server for more complex network situations
+  ],
+  iceTransportPolicy: 'all',
+  bundlePolicy: 'max-bundle',
+  rtcpMuxPolicy: 'require',
+  sdpSemantics: 'unified-plan',
+  iceCandidatePoolSize: 10  // Add this to improve connection establishment
+};
 
     // State variables
     let peerConnection = null;
@@ -1757,6 +1761,78 @@
 
     // Call detailed stats logging every 5 seconds
     setInterval(logDetailedStats, 5000);
+
+
+    // Add this function to your client code
+async function debugNetworkConnectivity() {
+    if (!peerConnection) {
+        log('No peer connection available for debugging', 'warning');
+        return;
+    }
+
+    log('---- Network Connectivity Debug ----', 'info');
+
+    // Log connection states
+    log(`Connection state: ${peerConnection.connectionState}`, 'info');
+    log(`ICE connection state: ${peerConnection.iceConnectionState}`, 'info');
+    log(`ICE gathering state: ${peerConnection.iceGatheringState}`, 'info');
+    log(`Signaling state: ${peerConnection.signalingState}`, 'info');
+
+    // Get and log ICE candidates
+    const transceivers = peerConnection.getTransceivers();
+    log(`Transceivers: ${transceivers.length}`, 'info');
+
+    // Get stats
+    try {
+        const stats = await peerConnection.getStats();
+        let candidatePairs = [];
+        let localCandidates = [];
+        let remoteCandidates = [];
+
+        stats.forEach(stat => {
+            if (stat.type === 'candidate-pair') {
+                candidatePairs.push(stat);
+            } else if (stat.type === 'local-candidate') {
+                localCandidates.push(stat);
+            } else if (stat.type === 'remote-candidate') {
+                remoteCandidates.push(stat);
+            }
+        });
+
+        // Log candidate pairs
+        log(`ICE Candidate Pairs: ${candidatePairs.length}`, 'info');
+        candidatePairs.forEach((pair, index) => {
+            log(`Pair ${index}: state=${pair.state}, nominated=${pair.nominated},
+                 localCandidateId=${pair.localCandidateId},
+                 remoteCandidateId=${pair.remoteCandidateId}`, 'info');
+        });
+
+        // Log local candidates
+        log(`Local Candidates: ${localCandidates.length}`, 'info');
+        localCandidates.forEach((candidate, index) => {
+            log(`Local ${index}: type=${candidate.candidateType},
+                 protocol=${candidate.protocol}, address=${candidate.address}:${candidate.port}`, 'info');
+        });
+
+        // Log remote candidates
+        log(`Remote Candidates: ${remoteCandidates.length}`, 'info');
+        remoteCandidates.forEach((candidate, index) => {
+            log(`Remote ${index}: type=${candidate.candidateType},
+                 protocol=${candidate.protocol}, address=${candidate.address}:${candidate.port}`, 'info');
+        });
+    } catch (e) {
+        log(`Error getting stats: ${e.message}`, 'error');
+    }
+
+    log('---- End Network Connectivity Debug ----', 'info');
+}
+
+// Add a button to the UI to trigger this debug function
+const networkDebugBtn = document.createElement('button');
+networkDebugBtn.textContent = 'Debug Network';
+networkDebugBtn.className = 'btn btn-sm';
+networkDebugBtn.onclick = debugNetworkConnectivity;
+document.querySelector('.diagnostic-buttons').appendChild(networkDebugBtn);
   </script>
 </body>
 </html>
