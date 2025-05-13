@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/Harshitk-cp/streamhive/apps/frame-splitter/internal/config"
 	"github.com/Harshitk-cp/streamhive/apps/frame-splitter/internal/handler"
@@ -161,13 +162,19 @@ func main() {
 	// Connect to WebRTC service if enabled
 	if cfg.Routing.WebRTCOut.Enabled {
 		log.Printf("Connecting to WebRTC service at %s", cfg.Routing.WebRTCOut.Address)
-		webrtcClient, err := transport.NewWebRTCClient(cfg.Routing.WebRTCOut.Address)
-		if err != nil {
-			log.Printf("Warning: Failed to connect to WebRTC service: %v", err)
-		} else {
-			defer webrtcClient.Close()
-			frameProcessor.RegisterRoute("webrtc", webrtcClient)
-			log.Println("Successfully connected to WebRTC service")
+		maxRetries := 5
+		for i := 0; i < maxRetries; i++ {
+			webrtcClient, err := transport.NewWebRTCClient(cfg.Routing.WebRTCOut.Address)
+			if err == nil {
+				defer webrtcClient.Close()
+				frameProcessor.RegisterRoute("webrtc", webrtcClient)
+				log.Println("Successfully connected to WebRTC service")
+				break
+			}
+			log.Printf("Attempt %d: Failed to connect to WebRTC service: %v", i+1, err)
+			if i < maxRetries-1 {
+				time.Sleep(time.Duration(i+1) * time.Second)
+			}
 		}
 	}
 

@@ -13,6 +13,7 @@ import (
 	"github.com/Harshitk-cp/streamhive/apps/webrtc-out/internal/config"
 	"github.com/Harshitk-cp/streamhive/apps/webrtc-out/internal/model"
 	"github.com/Harshitk-cp/streamhive/apps/webrtc-out/internal/util"
+	framepb "github.com/Harshitk-cp/streamhive/libs/proto/frame"
 	signalpb "github.com/Harshitk-cp/streamhive/libs/proto/signaling"
 	"github.com/pion/webrtc/v3"
 	"github.com/pion/webrtc/v3/pkg/media"
@@ -35,6 +36,7 @@ type WebRTCService struct {
 	mediaEngine   *webrtc.MediaEngine
 	api           *webrtc.API
 	opusParams    OpusParams
+	clientsMutex  sync.RWMutex
 }
 
 // OpusParams contains Opus codec parameters
@@ -234,42 +236,19 @@ func (s *WebRTCService) HandleOffer(streamID, viewerID string, offer webrtc.Sess
 		}
 	}
 
-	// Create peer connection with explicit configuration
+	// Create a PeerConnection with the appropriate configuration
 	peerConnection, err := s.api.NewPeerConnection(s.webrtcConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create peer connection: %w", err)
 	}
 
-	// FIXED: Create transceivers with proper direction BEFORE setting the remote description
-	// This ensures that the SDP answer has the correct direction attributes
-	audioTransceiver, err := peerConnection.AddTransceiverFromKind(
-		webrtc.RTPCodecTypeAudio,
-		webrtc.RTPTransceiverInit{
-			Direction: webrtc.RTPTransceiverDirectionSendonly,
-		},
-	)
-	if err != nil {
-		peerConnection.Close()
-		return nil, fmt.Errorf("failed to add audio transceiver: %w", err)
-	}
-
-	videoTransceiver, err := peerConnection.AddTransceiverFromKind(
-		webrtc.RTPCodecTypeVideo,
-		webrtc.RTPTransceiverInit{
-			Direction: webrtc.RTPTransceiverDirectionSendonly,
-		},
-	)
-	if err != nil {
-		peerConnection.Close()
-		return nil, fmt.Errorf("failed to add video transceiver: %w", err)
-	}
-
-	// Create audio track
+	// Create audio track with explicit codec parameters
 	audioTrack, err := webrtc.NewTrackLocalStaticSample(
 		webrtc.RTPCodecCapability{
-			MimeType:  webrtc.MimeTypeOpus,
-			ClockRate: 48000,
-			Channels:  2,
+			MimeType:    webrtc.MimeTypeOpus,
+			ClockRate:   48000,
+			Channels:    2,
+			SDPFmtpLine: "minptime=10;useinbandfec=1",
 		},
 		"audio", "streamhive-audio",
 	)
@@ -278,7 +257,7 @@ func (s *WebRTCService) HandleOffer(streamID, viewerID string, offer webrtc.Sess
 		return nil, fmt.Errorf("failed to create audio track: %w", err)
 	}
 
-	// Create video track
+	// Create video track with explicit codec parameters
 	videoTrack, err := webrtc.NewTrackLocalStaticSample(
 		webrtc.RTPCodecCapability{
 			MimeType:  webrtc.MimeTypeH264,
@@ -291,33 +270,46 @@ func (s *WebRTCService) HandleOffer(streamID, viewerID string, offer webrtc.Sess
 		return nil, fmt.Errorf("failed to create video track: %w", err)
 	}
 
-	// Replace the transceivers' sender tracks
-	if err := audioTransceiver.Sender().ReplaceTrack(audioTrack); err != nil {
+	// Add tracks to connection - important for proper direction
+	audioSender, err := peerConnection.AddTrack(audioTrack)
+	if err != nil {
 		peerConnection.Close()
-		return nil, fmt.Errorf("failed to replace audio track: %w", err)
+		return nil, fmt.Errorf("failed to add audio track: %w", err)
 	}
 
-	if err := videoTransceiver.Sender().ReplaceTrack(videoTrack); err != nil {
+	videoSender, err := peerConnection.AddTrack(videoTrack)
+	if err != nil {
 		peerConnection.Close()
-		return nil, fmt.Errorf("failed to replace video track: %w", err)
+		return nil, fmt.Errorf("failed to add video track: %w", err)
 	}
 
-	// Handle RTCP packets for audio
+	// Process RTCP packets for audio
 	go func() {
 		rtcpBuf := make([]byte, 1500)
 		for {
-			if _, _, rtcpErr := audioTransceiver.Sender().Read(rtcpBuf); rtcpErr != nil {
+			if _, _, rtcpErr := audioSender.Read(rtcpBuf); rtcpErr != nil {
 				return
 			}
 		}
 	}()
 
-	// Handle RTCP packets for video
+	// Process RTCP packets for video
 	go func() {
 		rtcpBuf := make([]byte, 1500)
 		for {
-			if _, _, rtcpErr := videoTransceiver.Sender().Read(rtcpBuf); rtcpErr != nil {
-				return
+			if _, _, rtcpErr := videoSender.Read(rtcpBuf); rtcpErr != nil {
+				log.Printf("Reading video RTCP packet: %v", rtcpErr)
+				if strings.Contains(rtcpErr.Error(), "closed") {
+					return
+				}
+
+				// Check for PLI (Picture Loss Indication)
+				pkt := rtcpBuf[0] >> 6
+				if pkt == 1 || pkt == 2 {
+					log.Printf("Received RTCP packet, requesting keyframe")
+					// Request keyframe
+					s.RequestKeyFrame(streamID)
+				}
 			}
 		}
 	}()
@@ -434,13 +426,15 @@ func (s *WebRTCService) HandleOffer(streamID, viewerID string, offer webrtc.Sess
 	// Set the remote SessionDescription
 	log.Printf("Setting remote description for viewer %s", viewerID)
 	if err := peerConnection.SetRemoteDescription(offer); err != nil {
-		log.Printf("Error setting remote description: %v", err)
-		peerConnection.Close()
+		log.Printf("Error setting remote description (offer length: %d): %v", len(offer.SDP), err)
+		if len(offer.SDP) > 100 {
+			log.Printf("Offer SDP preview: %s...", offer.SDP[:100])
+		}
 		return nil, fmt.Errorf("failed to set remote description: %w", err)
 	}
 
 	// Create answer
-	answer, err := peerConnection.CreateAnswer(nil)
+	answer, err := peerConnection.CreateAnswer(&webrtc.AnswerOptions{})
 	if err != nil {
 		peerConnection.Close()
 		return nil, fmt.Errorf("failed to create answer: %w", err)
@@ -468,6 +462,41 @@ func (s *WebRTCService) HandleOffer(streamID, viewerID string, offer webrtc.Sess
 
 	log.Printf("Successfully created peer connection for viewer %s on stream %s", viewerID, streamID)
 	return &answer, nil
+}
+
+// RequestKeyFrame requests a key frame from the frame splitter
+func (s *WebRTCService) RequestKeyFrame(streamID string) error {
+	log.Printf("Requesting key frame for stream %s", streamID)
+
+	// Connect to frame splitter service
+	conn, err := grpc.Dial(
+		s.cfg.FrameSplitter.Address,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithBlock(),
+		grpc.WithTimeout(5*time.Second),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to connect to frame splitter: %w", err)
+	}
+	defer conn.Close()
+
+	// Create client
+	client := framepb.NewFrameSplitterServiceClient(conn)
+
+	// Create request context with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	// Call RequestKeyFrame RPC
+	_, err = client.RequestKeyFrame(ctx, &framepb.RequestKeyFrameRequest{
+		StreamId: streamID,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to request key frame: %w", err)
+	}
+
+	log.Printf("Successfully requested key frame for stream %s", streamID)
+	return nil
 }
 
 // HandleICECandidate handles an ICE candidate from a viewer
@@ -692,95 +721,67 @@ func (s *WebRTCService) processFrames(streamID string) {
 	}
 }
 
-// broadcastVideoSample broadcasts a video sample to all viewers of a stream
+// Update the broadcastVideoSample function
 func (s *WebRTCService) broadcastVideoSample(streamID string, sample *media.Sample) {
-	// Track metrics
-	startTime := time.Now()
+	// Debug the sample contents (first few bytes)
 	sampleSize := len(sample.Data)
-
-	// Debug log the sample data (first 10 bytes)
 	if sampleSize > 0 {
 		prefix := sample.Data
 		if len(prefix) > 10 {
 			prefix = prefix[:10]
 		}
-		log.Printf("DEBUG: Video sample first bytes: %v", prefix)
+		log.Printf("DEBUG: Broadcasting video sample - size=%d bytes, first bytes=%v",
+			sampleSize, prefix)
 	}
 
 	s.streamsMutex.RLock()
 	stream, exists := s.streams[streamID]
 	if !exists {
 		s.streamsMutex.RUnlock()
-		log.Printf("Error: Stream %s not found for video sample", streamID)
 		return
 	}
-
-	viewerCount := len(stream.Viewers)
 	s.streamsMutex.RUnlock()
 
-	if viewerCount == 0 {
-		return // No viewers, don't log
+	// Get all viewers with proper synchronization
+	stream.Mutex.RLock()
+	viewerIDs := make([]string, 0, len(stream.Viewers))
+	for viewerID := range stream.Viewers {
+		viewerIDs = append(viewerIDs, viewerID)
 	}
+	stream.Mutex.RUnlock()
 
-	log.Printf("Broadcasting video sample: stream=%s, size=%d bytes, viewers=%d",
-		streamID, sampleSize, viewerCount)
-
-	// Track success/failure for each viewer
+	// Track metrics
 	successCount := 0
 	failureCount := 0
 
-	// Get all active viewers with minimal lock time
-	s.streamsMutex.RLock()
-	stream, exists = s.streams[streamID]
-	if !exists {
-		s.streamsMutex.RUnlock()
-		return
-	}
+	// Send to each viewer
+	for _, viewerID := range viewerIDs {
+		s.viewersMutex.RLock()
+		viewer, exists := s.viewers[viewerID]
+		s.viewersMutex.RUnlock()
 
-	// Process each viewer
-	for viewerID, viewer := range stream.Viewers {
-		if viewer.Status == model.StreamStatusActive {
-			pc := viewer.PeerConnection
-			if pc == nil {
-				continue
-			}
+		if !exists || viewer.Status != model.StreamStatusActive {
+			continue
+		}
 
-			// Find video track sender
-			senders := pc.GetSenders()
-			for _, sender := range senders {
-				if sender.Track() == nil || sender.Track().Kind() != webrtc.RTPCodecTypeVideo {
-					continue
-				}
-
-				track, ok := sender.Track().(*webrtc.TrackLocalStaticSample)
-				if !ok {
-					log.Printf("Error: Track for viewer %s is not TrackLocalStaticSample", viewerID)
-					continue
-				}
-
-				// Write sample with detailed error handling
-				if err := track.WriteSample(*sample); err != nil {
-					failureCount++
-					log.Printf("Error writing video sample to viewer %s: %v", viewerID, err)
-				} else {
-					successCount++
-					// Update stats
-					viewer.TotalBytes += int64(sampleSize)
-					viewer.Stats.VideoBytesSent += int64(sampleSize)
-					viewer.Stats.VideoPacketsSent++
-				}
-				break
+		// Use the stored VideoTrack directly
+		if viewer.VideoTrack != nil {
+			err := viewer.VideoTrack.WriteSample(*sample)
+			if err != nil {
+				log.Printf("Error writing video sample to viewer %s: %v", viewerID, err)
+				failureCount++
+			} else {
+				successCount++
+				viewer.TotalBytes += int64(sampleSize)
+				viewer.Stats.VideoBytesSent += int64(sampleSize)
+				viewer.Stats.VideoPacketsSent++
 			}
 		}
 	}
-	s.streamsMutex.RUnlock()
 
-	// Log delivery stats
+	// Log delivery stats if there was any activity
 	if successCount > 0 || failureCount > 0 {
-		log.Printf("Video delivery stats: success=%d, failure=%d, rate=%.1f%%, took=%dms",
-			successCount, failureCount,
-			float64(successCount)/float64(successCount+failureCount)*100,
-			time.Since(startTime).Milliseconds())
+		log.Printf("Video delivery: success=%d, failure=%d", successCount, failureCount)
 	}
 }
 

@@ -128,7 +128,7 @@ type Stream struct {
 	TotalViewers         int64
 	MaxConcurrentViewers int
 	CurrentViewers       int
-	Mutex                sync.Mutex
+	Mutex                sync.RWMutex
 }
 
 // StreamOptions represents options for a WebRTC stream

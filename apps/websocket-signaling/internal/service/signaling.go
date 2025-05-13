@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand"
 	"strings"
 	"sync"
 	"time"
@@ -308,79 +309,28 @@ func (s *SignalingService) handleOffer(msg model.SignalingMessage) {
 	// Parse offer payload
 	var offerSDP string
 
-	// The Payload could be either a json.RawMessage or another type
-	// Convert the payload to a string for processing
-	var payloadStr string
-
-	// Check the type of Payload and convert appropriately
-	switch p := msg.Payload.(type) {
-	case json.RawMessage:
-		payloadStr = string(p)
-	case []byte:
-		payloadStr = string(p)
-	case string:
-		payloadStr = p
-	default:
-		// Convert unknown types to JSON
-		payloadBytes, err := json.Marshal(msg.Payload)
-		if err != nil {
-			log.Printf("Error marshaling payload: %v", err)
-			s.sendErrorResponse(msg.SenderID, msg.StreamID, "invalid_offer", "Could not parse offer payload")
-			return
-		}
-		payloadStr = string(payloadBytes)
-	}
-
-	// First try to unmarshal as JSON object containing SDP
-	var offerPayload map[string]interface{}
-	if err := json.Unmarshal([]byte(payloadStr), &offerPayload); err == nil {
-		// Successfully parsed as JSON object
-		if sdp, ok := offerPayload["sdp"].(string); ok {
-			offerSDP = sdp
-			log.Printf("Successfully extracted SDP from JSON payload")
-		} else {
-			log.Printf("Invalid offer format: missing sdp field in JSON object")
-			s.sendErrorResponse(msg.SenderID, msg.StreamID, "invalid_offer", "Offer is missing SDP field")
-			return
-		}
-	} else {
-		// Try if payload is simply a string containing the SDP
-		var sdpString string
-		if err := json.Unmarshal([]byte(payloadStr), &sdpString); err == nil {
-			offerSDP = sdpString
-			log.Printf("Successfully extracted SDP as direct string")
-		} else {
-			// If it doesn't parse as JSON at all, try using the payload string directly
-			if strings.HasPrefix(strings.TrimSpace(payloadStr), "v=0") {
-				offerSDP = payloadStr
-				log.Printf("Using payload directly as SDP string")
-			} else {
-				log.Printf("Error parsing offer: %v", err)
-				s.sendErrorResponse(msg.SenderID, msg.StreamID, "invalid_offer", "Could not parse offer payload")
-				return
-			}
-		}
-	}
-
-	// Ensure the SDP doesn't have surrounding quotes and is properly formatted
-	offerSDP = strings.Trim(offerSDP, "\"")
-
-	// Make sure the SDP starts with v=0
-	if !strings.HasPrefix(strings.TrimSpace(offerSDP), "v=0") {
-		log.Printf("SDP doesn't start with v=0, which is invalid")
-		s.sendErrorResponse(msg.SenderID, msg.StreamID, "invalid_offer", "SDP format is invalid")
+	// Extract SDP with improved parsing
+	offerSDP, err := extractSDP(msg.Payload)
+	if err != nil {
+		log.Printf("Error extracting SDP: %v", err)
+		s.sendErrorResponse(msg.SenderID, msg.StreamID, "invalid_offer", "Could not parse offer payload")
 		return
 	}
 
-	// Log the SDP for debugging (truncated to avoid massive logs)
-	sdpPreviewLength := 50
-	if len(offerSDP) < sdpPreviewLength {
-		sdpPreviewLength = len(offerSDP)
-	}
-	log.Printf("Sending SDP offer to WebRTC service (first %d chars): %s",
-		sdpPreviewLength, offerSDP[:sdpPreviewLength])
+	// Log SDP length and validate
+	log.Printf("SDP offer length: %d bytes", len(offerSDP))
 
-	// Connect to WebRTC-out service via gRPC
+	// Make sure SDP looks valid
+	if !isValidSDP(offerSDP) {
+		log.Printf("Invalid SDP format")
+		s.sendErrorResponse(msg.SenderID, msg.StreamID, "invalid_offer", "Invalid SDP format")
+		return
+	}
+
+	// Connect to WebRTC-out service via gRPC with improved error handling
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
 	webrtcClient, conn, err := s.getWebRTCServiceClient()
 	if err != nil {
 		log.Printf("Failed to connect to WebRTC-out service: %v", err)
@@ -390,42 +340,56 @@ func (s *SignalingService) handleOffer(msg model.SignalingMessage) {
 	defer conn.Close()
 
 	// Forward offer to WebRTC-out service
+	log.Printf("Sending offer to WebRTC-out service for stream %s (size: %d bytes)", msg.StreamID, len(offerSDP))
 	req := &webrtcpb.OfferRequest{
 		StreamId: msg.StreamID,
 		ViewerId: msg.SenderID,
-		Offer:    offerSDP, // Plain SDP string without any JSON formatting
+		Offer:    offerSDP,
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
 
 	resp, err := webrtcClient.HandleOffer(ctx, req)
 	if err != nil {
 		log.Printf("Failed to handle offer: %v", err)
-		s.sendErrorResponse(msg.SenderID, msg.StreamID, "offer_rejected", "Could not process your connection request")
+		// Enhanced error handling
+		if strings.Contains(err.Error(), "EOF") || strings.Contains(err.Error(), "message size") {
+			log.Printf("Connection error detected - likely an issue with message size. SDP size: %d bytes", len(offerSDP))
+			s.sendErrorResponse(msg.SenderID, msg.StreamID, "connection_error", "WebRTC service error. Please try again.")
+		} else if strings.Contains(err.Error(), "timeout") {
+			s.sendErrorResponse(msg.SenderID, msg.StreamID, "timeout", "Connection timed out. Please try again.")
+		} else {
+			s.sendErrorResponse(msg.SenderID, msg.StreamID, "offer_rejected", "Could not process your connection request")
+		}
 		return
 	}
 
-	// Instead of Base64 encoding, create proper JSON
+	// Verify SDP answer
+	if !isValidSDP(resp.Answer) {
+		log.Printf("Invalid SDP answer received from WebRTC service")
+		s.sendErrorResponse(msg.SenderID, msg.StreamID, "internal_error", "Invalid answer received from WebRTC service")
+		return
+	}
+
+	log.Printf("Received valid SDP answer from WebRTC service, length: %d bytes", len(resp.Answer))
+
+	// Send answer back with proper JSON structure
 	answerData := map[string]string{
 		"sdp": resp.Answer,
 	}
 
-	// Marshal to JSON
-	answerJSON, err := json.Marshal(answerData)
+	answerBytes, err := json.Marshal(answerData)
 	if err != nil {
-		log.Printf("Failed to marshal answer to JSON: %v", err)
+		log.Printf("Failed to marshal answer data: %v", err)
 		s.sendErrorResponse(msg.SenderID, msg.StreamID, "internal_error", "Internal server error")
 		return
 	}
 
-	// Create answer message with proper JSON payload
+	// Create answer message
 	answer := model.SignalingMessage{
 		Type:        "answer",
 		StreamID:    msg.StreamID,
 		SenderID:    "server",
 		RecipientID: msg.SenderID,
-		Payload:     answerJSON, // Use the JSON bytes directly
+		Payload:     json.RawMessage(answerBytes),
 	}
 
 	s.clientsMutex.RLock()
@@ -629,25 +593,34 @@ func (s *SignalingService) getWebRTCServiceClient() (webrtcpb.WebRTCServiceClien
 	var err error
 	maxRetries := 3
 
+	// Define connection options once
+	dialOpts := []grpc.DialOption{
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithBlock(),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                10 * time.Second, // Increased from 5s to 10s
+			Timeout:             3 * time.Second,  // Increased from 2s to 3s
+			PermitWithoutStream: true,
+		}),
+		grpc.WithTimeout(10 * time.Second), // Increased timeout for connection
+		// Handle larger message sizes
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(20*1024*1024), // 20MB max receive
+			grpc.MaxCallSendMsgSize(20*1024*1024), // 20MB max send
+		),
+	}
+
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
 			log.Printf("Retrying connection to WebRTC service (attempt %d/%d)", attempt+1, maxRetries)
-			// Exponential backoff: 100ms, 200ms, 400ms
-			time.Sleep(time.Duration(100*(1<<attempt)) * time.Millisecond)
+			// Exponential backoff with jitter for more efficient retry strategy
+			backoffTime := time.Duration(100*(1<<attempt)) * time.Millisecond
+			jitter := time.Duration(rand.Intn(100)) * time.Millisecond
+			time.Sleep(backoffTime + jitter)
 		}
 
-		// Connect with modified options for better reliability
-		conn, err = grpc.Dial(
-			s.cfg.WebRTCOut.Address,
-			grpc.WithTransportCredentials(insecure.NewCredentials()),
-			grpc.WithBlock(),
-			grpc.WithKeepaliveParams(keepalive.ClientParameters{
-				Time:                5 * time.Second,
-				Timeout:             2 * time.Second,
-				PermitWithoutStream: true,
-			}),
-			grpc.WithTimeout(5*time.Second),
-		)
+		// Connect with optimized options
+		conn, err = grpc.Dial(s.cfg.WebRTCOut.Address, dialOpts...)
 
 		if err == nil {
 			// Successfully connected
@@ -664,6 +637,58 @@ func (s *SignalingService) getWebRTCServiceClient() (webrtcpb.WebRTCServiceClien
 	// Create client
 	client := webrtcpb.NewWebRTCServiceClient(conn)
 	return client, conn, nil
+}
+
+// Helper functions for SDP handling
+func extractSDP(payload interface{}) (string, error) {
+	var payloadStr string
+
+	// Convert payload to string based on type
+	switch p := payload.(type) {
+	case []byte:
+		payloadStr = string(p)
+	case string:
+		payloadStr = p
+	default:
+		// Try to marshal to JSON
+		payloadBytes, err := json.Marshal(payload)
+		if err != nil {
+			return "", fmt.Errorf("could not marshal payload: %v", err)
+		}
+		payloadStr = string(payloadBytes)
+	}
+
+	// Try different extraction methods
+
+	// 1. Check if it's already a valid SDP
+	if strings.HasPrefix(strings.TrimSpace(payloadStr), "v=0") {
+		return payloadStr, nil
+	}
+
+	// 2. Try JSON object with sdp field
+	var offerObject map[string]interface{}
+	if err := json.Unmarshal([]byte(payloadStr), &offerObject); err == nil {
+		if sdp, ok := offerObject["sdp"].(string); ok {
+			return sdp, nil
+		}
+	}
+
+	// 3. Try JSON string
+	var sdpString string
+	if err := json.Unmarshal([]byte(payloadStr), &sdpString); err == nil {
+		if strings.HasPrefix(strings.TrimSpace(sdpString), "v=0") {
+			return sdpString, nil
+		}
+	}
+
+	return "", fmt.Errorf("could not extract SDP from payload")
+}
+
+func isValidSDP(sdp string) bool {
+	sdp = strings.TrimSpace(sdp)
+	return strings.HasPrefix(sdp, "v=0") &&
+		strings.Contains(sdp, "m=") && // At least one media section
+		len(sdp) > 50 // Reasonable minimum length
 }
 
 // GetClientCount returns the number of clients connected to a stream

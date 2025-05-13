@@ -10,6 +10,7 @@ import (
 	framepb "github.com/Harshitk-cp/streamhive/libs/proto/frame"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -27,39 +28,41 @@ func NewGRPCHandler(processor *processor.FrameProcessor) *GRPCHandler {
 }
 
 // ProcessFrame processes a single frame
-func (h *GRPCHandler) ProcessFrame(ctx context.Context, req *framepb.ProcessFrameRequest) (*framepb.ProcessFrameResponse, error) {
+func (h *GRPCHandler) ProcessFrame(ctx context.Context, frame *framepb.Frame) (*framepb.ProcessFrameResponse, error) {
 	// Generate a frame ID if not provided
-	frameID := req.Frame.FrameId
+	frameID := frame.FrameId
 	if frameID == "" {
 		frameID = util.GenerateID()
 	}
 
 	// Convert request to internal model
-	frame := model.Frame{
-		StreamID:   req.Frame.StreamId,
+	internalFrame := model.Frame{
+		StreamID:   frame.StreamId,
 		FrameID:    frameID,
-		Timestamp:  req.Frame.Timestamp.AsTime(),
-		Type:       model.FrameType(req.Frame.Type.String()),
-		Data:       req.Frame.Data,
-		Metadata:   req.Frame.Metadata,
-		Sequence:   req.Frame.Sequence,
-		IsKeyFrame: req.Frame.IsKeyFrame,
-		Duration:   req.Frame.Duration,
+		Timestamp:  frame.Timestamp.AsTime(),
+		Type:       model.FrameType(frame.Type.String()),
+		Data:       frame.Data,
+		Metadata:   frame.Metadata,
+		Sequence:   frame.Sequence,
+		IsKeyFrame: frame.IsKeyFrame,
+		// Duration:   frame.Duration,
 	}
 
 	// Process frame
-	result, err := h.processor.ProcessFrame(ctx, frame)
+	result, err := h.processor.ProcessFrame(ctx, internalFrame)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to process frame: %v", err)
 	}
 
 	// Convert result to response
 	response := &framepb.ProcessFrameResponse{
-		FrameId:      result.FrameID,
-		Status:       result.Status,
-		Error:        result.Error,
-		Destinations: result.Destinations,
-		Metadata:     result.Metadata,
+		FrameId: result.FrameID,
+		Status:  result.Status,
+	}
+
+	// Handle error message differently if the field doesn't exist
+	if result.Error != "" && result.Status != "accepted" {
+		response.Status = "error: " + result.Error
 	}
 
 	return response, nil
@@ -79,7 +82,7 @@ func (h *GRPCHandler) ProcessFrameBatch(ctx context.Context, req *framepb.Proces
 			Metadata:   pbFrame.Metadata,
 			Sequence:   pbFrame.Sequence,
 			IsKeyFrame: pbFrame.IsKeyFrame,
-			Duration:   pbFrame.Duration,
+			// Duration:   pbFrame.Duration,
 		}
 		frames = append(frames, frame)
 	}
@@ -98,13 +101,17 @@ func (h *GRPCHandler) ProcessFrameBatch(ctx context.Context, req *framepb.Proces
 	// Convert result to response
 	results := make([]*framepb.ProcessFrameResponse, 0, len(result.Results))
 	for _, res := range result.Results {
-		results = append(results, &framepb.ProcessFrameResponse{
-			FrameId:      res.FrameID,
-			Status:       res.Status,
-			Error:        res.Error,
-			Destinations: res.Destinations,
-			Metadata:     res.Metadata,
-		})
+		frameResponse := &framepb.ProcessFrameResponse{
+			FrameId: res.FrameID,
+			Status:  res.Status,
+		}
+
+		// Handle error message if needed
+		if res.Error != "" && res.Status != "accepted" {
+			frameResponse.Status = "error: " + res.Error
+		}
+
+		results = append(results, frameResponse)
 	}
 
 	response := &framepb.ProcessFrameBatchResponse{
@@ -112,6 +119,27 @@ func (h *GRPCHandler) ProcessFrameBatch(ctx context.Context, req *framepb.Proces
 	}
 
 	return response, nil
+}
+
+// RequestKeyFrame requests a key frame for a stream
+func (h *GRPCHandler) RequestKeyFrame(ctx context.Context, req *framepb.RequestKeyFrameRequest) (*framepb.RequestKeyFrameResponse, error) {
+	// Request a key frame from the processor
+	streamID := req.StreamId
+
+	// Get stream config to ensure it exists
+	_, err := h.processor.GetStreamConfig(streamID)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "stream not found: %v", err)
+	}
+
+	// In a real implementation, you'd trigger key frame generation
+	// This could involve updating a flag in the stream configuration
+	// or sending a signal to the encoder
+
+	// Return a simple success response
+	return &framepb.RequestKeyFrameResponse{
+		Status: "key_frame_requested",
+	}, nil
 }
 
 // GetStreamConfig gets the configuration for a stream
@@ -230,8 +258,23 @@ func (h *GRPCHandler) RestoreFrame(ctx context.Context, req *framepb.RestoreFram
 		Metadata:   frame.Metadata,
 		Sequence:   frame.Sequence,
 		IsKeyFrame: frame.IsKeyFrame,
-		Duration:   frame.Duration,
+		// Duration:   frame.Duration,
 	}
 
 	return protoFrame, nil
+}
+
+// These are placeholder stubs for required interface methods
+// You'll need to implement them properly or they'll return "unimplemented" errors
+
+func (h *GRPCHandler) SubscribeToStream(req *framepb.SubscribeToStreamRequest, stream framepb.FrameSplitterService_SubscribeToStreamServer) error {
+	return status.Errorf(codes.Unimplemented, "method SubscribeToStream not implemented")
+}
+
+func (h *GRPCHandler) RegisterConsumer(ctx context.Context, req *framepb.RegisterConsumerRequest) (*framepb.RegisterConsumerResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RegisterConsumer not implemented")
+}
+
+func (h *GRPCHandler) ListStreams(ctx context.Context, req *emptypb.Empty) (*framepb.ListStreamsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListStreams not implemented")
 }

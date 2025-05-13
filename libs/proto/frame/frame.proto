@@ -24,6 +24,21 @@ service FrameSplitterService {
 
   // ListStreams lists all active streams
   rpc ListStreams(google.protobuf.Empty) returns (ListStreamsResponse);
+
+  // Request a key frame for a stream
+  rpc RequestKeyFrame(RequestKeyFrameRequest) returns (RequestKeyFrameResponse);
+  
+  // Get stream configuration
+  rpc GetStreamConfig(GetStreamConfigRequest) returns (StreamConfig);
+  
+  // Update stream configuration
+  rpc UpdateStreamConfig(StreamConfig) returns (UpdateStreamConfigResponse);
+  
+  // Get stream statistics
+  rpc GetStreamStats(GetStreamStatsRequest) returns (StreamStats);
+  
+  // Restore a frame from backup
+  rpc RestoreFrame(RestoreFrameRequest) returns (Frame);
 }
 
 // FrameType represents the type of a frame
@@ -32,6 +47,14 @@ enum FrameType {
   VIDEO = 1;
   AUDIO = 2;
   METADATA = 3;
+}
+
+message RequestKeyFrameRequest {
+  string stream_id = 1;
+}
+
+message RequestKeyFrameResponse {
+  string status = 1;
 }
 
 // Frame represents a media frame
@@ -44,12 +67,14 @@ message Frame {
   map<string, string> metadata = 6;
   int64 sequence = 7;
   bool is_key_frame = 8;
+  int64 duration = 9;
 }
 
 // ProcessFrameResponse is the response to a ProcessFrame request
 message ProcessFrameResponse {
   string frame_id = 1;
   string status = 2;
+  // Removed Error, Destinations, and Metadata fields
 }
 
 // ProcessFrameBatchRequest is a request to process a batch of frames
@@ -60,8 +85,7 @@ message ProcessFrameBatchRequest {
 
 // ProcessFrameBatchResponse is the response to a ProcessFrameBatch request
 message ProcessFrameBatchResponse {
-  string status = 1;
-  int32 processed_count = 2;
+  repeated ProcessFrameResponse results = 1;
 }
 
 // SubscribeToStreamRequest is a request to subscribe to a stream
@@ -97,4 +121,58 @@ message StreamInfo {
   string status = 2;
   google.protobuf.Timestamp created_at = 3;
   google.protobuf.Timestamp last_activity = 4;
+}
+
+// GetStreamConfigRequest is a request to get stream configuration
+message GetStreamConfigRequest {
+  string stream_id = 1;
+}
+
+// StreamConfig contains configuration for a stream
+message StreamConfig {
+  string stream_id = 1;
+  repeated RoutingRule routing_rules = 2;
+  bool backup_enabled = 3;
+  string storage_path = 4;
+  int64 retention_time = 5;
+}
+
+// RoutingRule defines how frames should be routed
+message RoutingRule {
+  string destination = 1;
+  string filter = 2;
+  int32 priority = 3;
+  bool enabled = 4;
+  int32 batch_size = 5;
+}
+
+// UpdateStreamConfigResponse is the response to an UpdateStreamConfig request
+message UpdateStreamConfigResponse {
+  string status = 1;
+}
+
+// GetStreamStatsRequest is a request to get stream statistics
+message GetStreamStatsRequest {
+  string stream_id = 1;
+}
+
+// StreamStats contains statistics for a stream
+message StreamStats {
+  string stream_id = 1;
+  int64 frames_processed = 2;
+  int64 bytes_processed = 3;
+  int64 frames_dropped = 4;
+  double avg_processing_time = 5;
+  google.protobuf.Timestamp last_processed_at = 6;
+  google.protobuf.Timestamp last_key_frame_at = 7;
+  double video_frame_rate = 8;
+  double audio_frame_rate = 9;
+  int64 video_bitrate = 10;
+  int64 audio_bitrate = 11;
+}
+
+// RestoreFrameRequest is a request to restore a frame from backup
+message RestoreFrameRequest {
+  string stream_id = 1;
+  string frame_id = 2;
 }

@@ -44,55 +44,69 @@ func (h *GRPCHandler) HandleOffer(ctx context.Context, req *webrtcpb.OfferReques
 	// Clean and prepare the SDP
 	offerSDP := req.Offer
 
-	// Add detailed logging to inspect the SDP
-	log.Printf("Raw SDP from request (first 50 chars): %s", offerSDP[:min(len(offerSDP), 50)])
+	// Log SDP size
+	log.Printf("Processing offer with length: %d bytes", len(offerSDP))
 
-	// Make sure the SDP starts with v=0 which is the first line of a valid SDP
-	if !strings.HasPrefix(strings.TrimSpace(offerSDP), "v=0") {
-		// If SDP doesn't start with v=0, it might be JSON encoded or otherwise malformed
-		log.Printf("SDP appears malformed, doesn't start with v=0, trying to fix it")
+	// Ensure SDP is properly formatted and validate it
+	offerSDP = strings.TrimSpace(offerSDP)
+	if !strings.HasPrefix(offerSDP, "v=0") {
+		// If SDP doesn't start with v=0, try to extract it with improved methods
+		log.Printf("SDP doesn't start with v=0, trying to fix it")
+
+		// Try various approaches in sequence
+		fixed := false
 
 		// Try to unescape JSON strings
-		unescaped, err := strconv.Unquote("\"" + offerSDP + "\"")
-		if err == nil {
-			offerSDP = unescaped
-			log.Printf("Unescaped SDP (first 50 chars): %s", offerSDP[:min(len(offerSDP), 50)])
+		if !fixed {
+			unescaped, err := strconv.Unquote("\"" + offerSDP + "\"")
+			if err == nil && strings.HasPrefix(strings.TrimSpace(unescaped), "v=0") {
+				offerSDP = unescaped
+				fixed = true
+				log.Printf("Fixed SDP using JSON unescaping")
+			}
 		}
 
 		// Try to extract from JSON if it looks like JSON
-		if strings.HasPrefix(offerSDP, "{") {
+		if !fixed && strings.HasPrefix(offerSDP, "{") {
 			var sdpObj map[string]interface{}
 			if err := json.Unmarshal([]byte(offerSDP), &sdpObj); err == nil {
-				if sdp, ok := sdpObj["sdp"].(string); ok {
+				if sdp, ok := sdpObj["sdp"].(string); ok && strings.HasPrefix(strings.TrimSpace(sdp), "v=0") {
 					offerSDP = sdp
-					log.Printf("Extracted SDP from JSON (first 50 chars): %s", offerSDP[:min(len(offerSDP), 50)])
+					fixed = true
+					log.Printf("Extracted SDP from JSON object")
 				}
 			}
 		}
 
-		// Final check to ensure it looks like an SDP
-		if !strings.HasPrefix(strings.TrimSpace(offerSDP), "v=0") {
-			return nil, status.Errorf(codes.InvalidArgument, "failed to process offer: SDP appears invalid, doesn't start with 'v=0'")
+		if !fixed {
+			return nil, status.Errorf(codes.InvalidArgument, "failed to process offer: invalid SDP format")
 		}
 	}
 
-	// Create SDP offer
+	// Create session description with validated SDP
 	offer := webrtc.SessionDescription{
 		Type: webrtc.SDPTypeOffer,
 		SDP:  offerSDP,
 	}
 
-	log.Printf("Full SDP offer for debugging: \n%s", offerSDP)
+	// Double-check that SDP has required sections
+	if !strings.Contains(offerSDP, "m=audio") && !strings.Contains(offerSDP, "m=video") {
+		log.Printf("SDP missing required media sections")
+		return nil, status.Error(codes.InvalidArgument, "SDP missing required media sections")
+	}
 
-	// Process the offer
+	log.Printf("Handling WebRTC offer for stream %s from viewer %s", req.StreamId, req.ViewerId)
+
+	// Process the offer using the webrtc service
 	answer, err := h.webrtcService.HandleOffer(req.StreamId, req.ViewerId, offer)
 	if err != nil {
 		log.Printf("Error handling offer: %v", err)
 		return nil, fmt.Errorf("failed to handle offer: %w", err)
 	}
 
-	// Log the successful answer creation
-	log.Printf("Created answer for stream %s, viewer %s", req.StreamId, req.ViewerId)
+	// Log success
+	log.Printf("Created answer for stream %s, viewer %s, answer length: %d bytes",
+		req.StreamId, req.ViewerId, len(answer.SDP))
 
 	// Return response
 	return &webrtcpb.AnswerResponse{
@@ -100,14 +114,6 @@ func (h *GRPCHandler) HandleOffer(ctx context.Context, req *webrtcpb.OfferReques
 		ViewerId: req.ViewerId,
 		Answer:   answer.SDP,
 	}, nil
-}
-
-// Helper function to find minimum of two integers
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // HandleICECandidate handles an ICE candidate from a viewer
