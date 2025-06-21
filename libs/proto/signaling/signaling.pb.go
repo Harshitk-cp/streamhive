@@ -336,6 +336,430 @@ func (x *SignalingStats) GetTimestamp() *timestamppb.Timestamp {
 	return nil
 }
 
+// SessionDescription represents an SDP session description
+type SessionDescription struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Type          string                 `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"`
+	Sdp           string                 `protobuf:"bytes,2,opt,name=sdp,proto3" json:"sdp,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SessionDescription) Reset() {
+	*x = SessionDescription{}
+	mi := &file_libs_proto_signaling_signaling_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SessionDescription) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SessionDescription) ProtoMessage() {}
+
+func (x *SessionDescription) ProtoReflect() protoreflect.Message {
+	mi := &file_libs_proto_signaling_signaling_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SessionDescription.ProtoReflect.Descriptor instead.
+func (*SessionDescription) Descriptor() ([]byte, []int) {
+	return file_libs_proto_signaling_signaling_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *SessionDescription) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+func (x *SessionDescription) GetSdp() string {
+	if x != nil {
+		return x.Sdp
+	}
+	return ""
+}
+
+// ICECandidate represents an ICE candidate
+type ICECandidate struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Candidate     string                 `protobuf:"bytes,1,opt,name=candidate,proto3" json:"candidate,omitempty"`
+	SdpMid        string                 `protobuf:"bytes,2,opt,name=sdp_mid,json=sdpMid,proto3" json:"sdp_mid,omitempty"`
+	SdpMlineIndex int32                  `protobuf:"varint,3,opt,name=sdp_mline_index,json=sdpMlineIndex,proto3" json:"sdp_mline_index,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ICECandidate) Reset() {
+	*x = ICECandidate{}
+	mi := &file_libs_proto_signaling_signaling_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ICECandidate) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ICECandidate) ProtoMessage() {}
+
+func (x *ICECandidate) ProtoReflect() protoreflect.Message {
+	mi := &file_libs_proto_signaling_signaling_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ICECandidate.ProtoReflect.Descriptor instead.
+func (*ICECandidate) Descriptor() ([]byte, []int) {
+	return file_libs_proto_signaling_signaling_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *ICECandidate) GetCandidate() string {
+	if x != nil {
+		return x.Candidate
+	}
+	return ""
+}
+
+func (x *ICECandidate) GetSdpMid() string {
+	if x != nil {
+		return x.SdpMid
+	}
+	return ""
+}
+
+func (x *ICECandidate) GetSdpMlineIndex() int32 {
+	if x != nil {
+		return x.SdpMlineIndex
+	}
+	return 0
+}
+
+// CreateOfferRequest is the request for creating an offer
+type CreateOfferRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	StreamId      string                 `protobuf:"bytes,1,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`
+	ClientId      string                 `protobuf:"bytes,2,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateOfferRequest) Reset() {
+	*x = CreateOfferRequest{}
+	mi := &file_libs_proto_signaling_signaling_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateOfferRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateOfferRequest) ProtoMessage() {}
+
+func (x *CreateOfferRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_libs_proto_signaling_signaling_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateOfferRequest.ProtoReflect.Descriptor instead.
+func (*CreateOfferRequest) Descriptor() ([]byte, []int) {
+	return file_libs_proto_signaling_signaling_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *CreateOfferRequest) GetStreamId() string {
+	if x != nil {
+		return x.StreamId
+	}
+	return ""
+}
+
+func (x *CreateOfferRequest) GetClientId() string {
+	if x != nil {
+		return x.ClientId
+	}
+	return ""
+}
+
+// CreateOfferResponse is the response for creating an offer
+type CreateOfferResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Offer         *SessionDescription    `protobuf:"bytes,1,opt,name=offer,proto3" json:"offer,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateOfferResponse) Reset() {
+	*x = CreateOfferResponse{}
+	mi := &file_libs_proto_signaling_signaling_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateOfferResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateOfferResponse) ProtoMessage() {}
+
+func (x *CreateOfferResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_libs_proto_signaling_signaling_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateOfferResponse.ProtoReflect.Descriptor instead.
+func (*CreateOfferResponse) Descriptor() ([]byte, []int) {
+	return file_libs_proto_signaling_signaling_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *CreateOfferResponse) GetOffer() *SessionDescription {
+	if x != nil {
+		return x.Offer
+	}
+	return nil
+}
+
+// CreateAnswerRequest is the request for creating an answer
+type CreateAnswerRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	StreamId      string                 `protobuf:"bytes,1,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`
+	ClientId      string                 `protobuf:"bytes,2,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	Offer         *SessionDescription    `protobuf:"bytes,3,opt,name=offer,proto3" json:"offer,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateAnswerRequest) Reset() {
+	*x = CreateAnswerRequest{}
+	mi := &file_libs_proto_signaling_signaling_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateAnswerRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateAnswerRequest) ProtoMessage() {}
+
+func (x *CreateAnswerRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_libs_proto_signaling_signaling_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateAnswerRequest.ProtoReflect.Descriptor instead.
+func (*CreateAnswerRequest) Descriptor() ([]byte, []int) {
+	return file_libs_proto_signaling_signaling_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *CreateAnswerRequest) GetStreamId() string {
+	if x != nil {
+		return x.StreamId
+	}
+	return ""
+}
+
+func (x *CreateAnswerRequest) GetClientId() string {
+	if x != nil {
+		return x.ClientId
+	}
+	return ""
+}
+
+func (x *CreateAnswerRequest) GetOffer() *SessionDescription {
+	if x != nil {
+		return x.Offer
+	}
+	return nil
+}
+
+// CreateAnswerResponse is the response for creating an answer
+type CreateAnswerResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Answer        *SessionDescription    `protobuf:"bytes,1,opt,name=answer,proto3" json:"answer,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateAnswerResponse) Reset() {
+	*x = CreateAnswerResponse{}
+	mi := &file_libs_proto_signaling_signaling_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateAnswerResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateAnswerResponse) ProtoMessage() {}
+
+func (x *CreateAnswerResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_libs_proto_signaling_signaling_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateAnswerResponse.ProtoReflect.Descriptor instead.
+func (*CreateAnswerResponse) Descriptor() ([]byte, []int) {
+	return file_libs_proto_signaling_signaling_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *CreateAnswerResponse) GetAnswer() *SessionDescription {
+	if x != nil {
+		return x.Answer
+	}
+	return nil
+}
+
+// AddICECandidateRequest is the request for adding an ICE candidate
+type AddICECandidateRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	StreamId      string                 `protobuf:"bytes,1,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`
+	ClientId      string                 `protobuf:"bytes,2,opt,name=client_id,json=clientId,proto3" json:"client_id,omitempty"`
+	Candidate     *ICECandidate          `protobuf:"bytes,3,opt,name=candidate,proto3" json:"candidate,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AddICECandidateRequest) Reset() {
+	*x = AddICECandidateRequest{}
+	mi := &file_libs_proto_signaling_signaling_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddICECandidateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddICECandidateRequest) ProtoMessage() {}
+
+func (x *AddICECandidateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_libs_proto_signaling_signaling_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddICECandidateRequest.ProtoReflect.Descriptor instead.
+func (*AddICECandidateRequest) Descriptor() ([]byte, []int) {
+	return file_libs_proto_signaling_signaling_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *AddICECandidateRequest) GetStreamId() string {
+	if x != nil {
+		return x.StreamId
+	}
+	return ""
+}
+
+func (x *AddICECandidateRequest) GetClientId() string {
+	if x != nil {
+		return x.ClientId
+	}
+	return ""
+}
+
+func (x *AddICECandidateRequest) GetCandidate() *ICECandidate {
+	if x != nil {
+		return x.Candidate
+	}
+	return nil
+}
+
+// AddICECandidateResponse is the response for adding an ICE candidate
+type AddICECandidateResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AddICECandidateResponse) Reset() {
+	*x = AddICECandidateResponse{}
+	mi := &file_libs_proto_signaling_signaling_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddICECandidateResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddICECandidateResponse) ProtoMessage() {}
+
+func (x *AddICECandidateResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_libs_proto_signaling_signaling_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddICECandidateResponse.ProtoReflect.Descriptor instead.
+func (*AddICECandidateResponse) Descriptor() ([]byte, []int) {
+	return file_libs_proto_signaling_signaling_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *AddICECandidateResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
 var File_libs_proto_signaling_signaling_proto protoreflect.FileDescriptor
 
 const file_libs_proto_signaling_signaling_proto_rawDesc = "" +
@@ -364,8 +788,35 @@ const file_libs_proto_signaling_signaling_proto_rawDesc = "" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\"w\n" +
 	"\x0eSignalingStats\x12+\n" +
 	"\x11connected_clients\x18\x01 \x01(\x05R\x10connectedClients\x128\n" +
-	"\ttimestamp\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp2\x8a\x03\n" +
-	"\x10SignalingService\x12K\n" +
+	"\ttimestamp\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\":\n" +
+	"\x12SessionDescription\x12\x12\n" +
+	"\x04type\x18\x01 \x01(\tR\x04type\x12\x10\n" +
+	"\x03sdp\x18\x02 \x01(\tR\x03sdp\"m\n" +
+	"\fICECandidate\x12\x1c\n" +
+	"\tcandidate\x18\x01 \x01(\tR\tcandidate\x12\x17\n" +
+	"\asdp_mid\x18\x02 \x01(\tR\x06sdpMid\x12&\n" +
+	"\x0fsdp_mline_index\x18\x03 \x01(\x05R\rsdpMlineIndex\"N\n" +
+	"\x12CreateOfferRequest\x12\x1b\n" +
+	"\tstream_id\x18\x01 \x01(\tR\bstreamId\x12\x1b\n" +
+	"\tclient_id\x18\x02 \x01(\tR\bclientId\"J\n" +
+	"\x13CreateOfferResponse\x123\n" +
+	"\x05offer\x18\x01 \x01(\v2\x1d.signaling.SessionDescriptionR\x05offer\"\x84\x01\n" +
+	"\x13CreateAnswerRequest\x12\x1b\n" +
+	"\tstream_id\x18\x01 \x01(\tR\bstreamId\x12\x1b\n" +
+	"\tclient_id\x18\x02 \x01(\tR\bclientId\x123\n" +
+	"\x05offer\x18\x03 \x01(\v2\x1d.signaling.SessionDescriptionR\x05offer\"M\n" +
+	"\x14CreateAnswerResponse\x125\n" +
+	"\x06answer\x18\x01 \x01(\v2\x1d.signaling.SessionDescriptionR\x06answer\"\x89\x01\n" +
+	"\x16AddICECandidateRequest\x12\x1b\n" +
+	"\tstream_id\x18\x01 \x01(\tR\bstreamId\x12\x1b\n" +
+	"\tclient_id\x18\x02 \x01(\tR\bclientId\x125\n" +
+	"\tcandidate\x18\x03 \x01(\v2\x17.signaling.ICECandidateR\tcandidate\"3\n" +
+	"\x17AddICECandidateResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess2\x83\x05\n" +
+	"\x10SignalingService\x12L\n" +
+	"\vCreateOffer\x12\x1d.signaling.CreateOfferRequest\x1a\x1e.signaling.CreateOfferResponse\x12O\n" +
+	"\fCreateAnswer\x12\x1e.signaling.CreateAnswerRequest\x1a\x1f.signaling.CreateAnswerResponse\x12X\n" +
+	"\x0fAddICECandidate\x12!.signaling.AddICECandidateRequest\x1a\".signaling.AddICECandidateResponse\x12K\n" +
 	"\x14SendSignalingMessage\x12\x1b.signaling.SignalingMessage\x1a\x16.google.protobuf.Empty\x12G\n" +
 	"\rGetStreamInfo\x12\x1f.signaling.GetStreamInfoRequest\x1a\x15.signaling.StreamInfo\x12P\n" +
 	"\x11NotifyStreamEnded\x12#.signaling.NotifyStreamEndedRequest\x1a\x16.google.protobuf.Empty\x12=\n" +
@@ -384,35 +835,53 @@ func file_libs_proto_signaling_signaling_proto_rawDescGZIP() []byte {
 	return file_libs_proto_signaling_signaling_proto_rawDescData
 }
 
-var file_libs_proto_signaling_signaling_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_libs_proto_signaling_signaling_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_libs_proto_signaling_signaling_proto_goTypes = []any{
 	(*SignalingMessage)(nil),         // 0: signaling.SignalingMessage
 	(*GetStreamInfoRequest)(nil),     // 1: signaling.GetStreamInfoRequest
 	(*StreamInfo)(nil),               // 2: signaling.StreamInfo
 	(*NotifyStreamEndedRequest)(nil), // 3: signaling.NotifyStreamEndedRequest
 	(*SignalingStats)(nil),           // 4: signaling.SignalingStats
-	(*timestamppb.Timestamp)(nil),    // 5: google.protobuf.Timestamp
-	(*emptypb.Empty)(nil),            // 6: google.protobuf.Empty
+	(*SessionDescription)(nil),       // 5: signaling.SessionDescription
+	(*ICECandidate)(nil),             // 6: signaling.ICECandidate
+	(*CreateOfferRequest)(nil),       // 7: signaling.CreateOfferRequest
+	(*CreateOfferResponse)(nil),      // 8: signaling.CreateOfferResponse
+	(*CreateAnswerRequest)(nil),      // 9: signaling.CreateAnswerRequest
+	(*CreateAnswerResponse)(nil),     // 10: signaling.CreateAnswerResponse
+	(*AddICECandidateRequest)(nil),   // 11: signaling.AddICECandidateRequest
+	(*AddICECandidateResponse)(nil),  // 12: signaling.AddICECandidateResponse
+	(*timestamppb.Timestamp)(nil),    // 13: google.protobuf.Timestamp
+	(*emptypb.Empty)(nil),            // 14: google.protobuf.Empty
 }
 var file_libs_proto_signaling_signaling_proto_depIdxs = []int32{
-	5, // 0: signaling.StreamInfo.created_at:type_name -> google.protobuf.Timestamp
-	5, // 1: signaling.StreamInfo.updated_at:type_name -> google.protobuf.Timestamp
-	5, // 2: signaling.SignalingStats.timestamp:type_name -> google.protobuf.Timestamp
-	0, // 3: signaling.SignalingService.SendSignalingMessage:input_type -> signaling.SignalingMessage
-	1, // 4: signaling.SignalingService.GetStreamInfo:input_type -> signaling.GetStreamInfoRequest
-	3, // 5: signaling.SignalingService.NotifyStreamEnded:input_type -> signaling.NotifyStreamEndedRequest
-	6, // 6: signaling.SignalingService.GetStats:input_type -> google.protobuf.Empty
-	0, // 7: signaling.SignalingService.StreamSignaling:input_type -> signaling.SignalingMessage
-	6, // 8: signaling.SignalingService.SendSignalingMessage:output_type -> google.protobuf.Empty
-	2, // 9: signaling.SignalingService.GetStreamInfo:output_type -> signaling.StreamInfo
-	6, // 10: signaling.SignalingService.NotifyStreamEnded:output_type -> google.protobuf.Empty
-	4, // 11: signaling.SignalingService.GetStats:output_type -> signaling.SignalingStats
-	0, // 12: signaling.SignalingService.StreamSignaling:output_type -> signaling.SignalingMessage
-	8, // [8:13] is the sub-list for method output_type
-	3, // [3:8] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	13, // 0: signaling.StreamInfo.created_at:type_name -> google.protobuf.Timestamp
+	13, // 1: signaling.StreamInfo.updated_at:type_name -> google.protobuf.Timestamp
+	13, // 2: signaling.SignalingStats.timestamp:type_name -> google.protobuf.Timestamp
+	5,  // 3: signaling.CreateOfferResponse.offer:type_name -> signaling.SessionDescription
+	5,  // 4: signaling.CreateAnswerRequest.offer:type_name -> signaling.SessionDescription
+	5,  // 5: signaling.CreateAnswerResponse.answer:type_name -> signaling.SessionDescription
+	6,  // 6: signaling.AddICECandidateRequest.candidate:type_name -> signaling.ICECandidate
+	7,  // 7: signaling.SignalingService.CreateOffer:input_type -> signaling.CreateOfferRequest
+	9,  // 8: signaling.SignalingService.CreateAnswer:input_type -> signaling.CreateAnswerRequest
+	11, // 9: signaling.SignalingService.AddICECandidate:input_type -> signaling.AddICECandidateRequest
+	0,  // 10: signaling.SignalingService.SendSignalingMessage:input_type -> signaling.SignalingMessage
+	1,  // 11: signaling.SignalingService.GetStreamInfo:input_type -> signaling.GetStreamInfoRequest
+	3,  // 12: signaling.SignalingService.NotifyStreamEnded:input_type -> signaling.NotifyStreamEndedRequest
+	14, // 13: signaling.SignalingService.GetStats:input_type -> google.protobuf.Empty
+	0,  // 14: signaling.SignalingService.StreamSignaling:input_type -> signaling.SignalingMessage
+	8,  // 15: signaling.SignalingService.CreateOffer:output_type -> signaling.CreateOfferResponse
+	10, // 16: signaling.SignalingService.CreateAnswer:output_type -> signaling.CreateAnswerResponse
+	12, // 17: signaling.SignalingService.AddICECandidate:output_type -> signaling.AddICECandidateResponse
+	14, // 18: signaling.SignalingService.SendSignalingMessage:output_type -> google.protobuf.Empty
+	2,  // 19: signaling.SignalingService.GetStreamInfo:output_type -> signaling.StreamInfo
+	14, // 20: signaling.SignalingService.NotifyStreamEnded:output_type -> google.protobuf.Empty
+	4,  // 21: signaling.SignalingService.GetStats:output_type -> signaling.SignalingStats
+	0,  // 22: signaling.SignalingService.StreamSignaling:output_type -> signaling.SignalingMessage
+	15, // [15:23] is the sub-list for method output_type
+	7,  // [7:15] is the sub-list for method input_type
+	7,  // [7:7] is the sub-list for extension type_name
+	7,  // [7:7] is the sub-list for extension extendee
+	0,  // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_libs_proto_signaling_signaling_proto_init() }
@@ -426,7 +895,7 @@ func file_libs_proto_signaling_signaling_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_libs_proto_signaling_signaling_proto_rawDesc), len(file_libs_proto_signaling_signaling_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   5,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

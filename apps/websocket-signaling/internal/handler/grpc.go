@@ -97,3 +97,33 @@ func (h *GRPCSignalingHandler) StreamSignaling(stream signalpb.SignalingService_
 	// For simplicity, we'll just return unimplemented for now
 	return status.Errorf(codes.Unimplemented, "method StreamSignaling not implemented")
 }
+
+// CreateOffer creates a WebRTC offer
+func (h *GRPCSignalingHandler) CreateOffer(ctx context.Context, req *signalpb.CreateOfferRequest) (*signalpb.CreateOfferResponse, error) {
+	// Implementation would integrate with actual WebRTC functionality
+	return &signalpb.CreateOfferResponse{
+		Offer: &signalpb.SessionDescription{
+			Type: "offer",
+			Sdp:  "mock-offer-sdp",
+		},
+	}, nil
+}
+
+// CreateAnswer creates a WebRTC answer
+func (h *GRPCSignalingHandler) CreateAnswer(ctx context.Context, req *signalpb.CreateAnswerRequest) (*signalpb.CreateAnswerResponse, error) {
+	// Implementation would integrate with actual WebRTC functionality
+	return &signalpb.CreateAnswerResponse{
+		Answer: &signalpb.SessionDescription{
+			Type: "answer",
+			Sdp:  "mock-answer-sdp",
+		},
+	}, nil
+}
+
+// AddICECandidate adds an ICE candidate
+func (h *GRPCSignalingHandler) AddICECandidate(ctx context.Context, req *signalpb.AddICECandidateRequest) (*signalpb.AddICECandidateResponse, error) {
+	// Implementation would handle ICE candidate processing
+	return &signalpb.AddICECandidateResponse{
+		Success: true,
+	}, nil
+}

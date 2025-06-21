@@ -34,6 +34,17 @@ func NewHTTPHandler(signalingService *service.SignalingService) http.Handler {
 
 // ServeHTTP implements the http.Handler interface
 func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Add CORS headers
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+	// Handle preflight requests
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	h.mux.ServeHTTP(w, r)
 }
 
@@ -145,4 +156,69 @@ func (h *HTTPHandler) streamHandler(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// handleHealth returns the health status of the service
+func (h *HTTPHandler) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	response := map[string]interface{}{
+		"status":  "healthy",
+		"service": "websocket-signaling",
+		"version": "1.0.0",
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// handleStreams handles stream-related requests
+func (h *HTTPHandler) handleStreams(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case "GET":
+		h.getStreams(w, r)
+	case "POST":
+		h.createStream(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// getStreams returns a list of active streams
+func (h *HTTPHandler) getStreams(w http.ResponseWriter, r *http.Request) {
+	streams := h.signalingService.GetActiveStreams()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"streams": streams,
+		"count":   len(streams),
+	})
+}
+
+// createStream creates a new stream
+func (h *HTTPHandler) createStream(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		StreamID string `json:"stream_id"`
+		Title    string `json:"title,omitempty"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if request.StreamID == "" {
+		http.Error(w, "stream_id is required", http.StatusBadRequest)
+		return
+	}
+
+	// Create the stream
+	stream := h.signalingService.CreateStream(request.StreamID, request.Title)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(stream)
 }

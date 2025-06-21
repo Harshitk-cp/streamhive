@@ -18,53 +18,88 @@ type Config struct {
 		Environment string `yaml:"environment"`
 	} `yaml:"service"`
 
-	// HTTP server configuration for REST API and health checks
-	HTTP struct {
-		Address         string        `yaml:"address"`
-		ReadTimeout     time.Duration `yaml:"read_timeout"`
-		WriteTimeout    time.Duration `yaml:"write_timeout"`
-		ShutdownTimeout time.Duration `yaml:"shutdown_timeout"`
-	} `yaml:"http"`
+	HTTP      HTTPConfig      `yaml:"http"`
+	WebSocket WebSocketConfig `yaml:"websocket"`
+	GRPC      GRPCConfig      `yaml:"grpc"`
+	Log       LogConfig       `yaml:"log"`
+	WebRTCOut WebRTCOutConfig `yaml:"webrtc_out"`
+	Router    RouterConfig    `yaml:"router"`
+}
 
-	// WebSocket server configuration
-	WebSocket struct {
-		Address        string        `yaml:"address"`
-		Path           string        `yaml:"path"`
-		ReadTimeout    time.Duration `yaml:"read_timeout"`
-		WriteTimeout   time.Duration `yaml:"write_timeout"`
-		PingInterval   time.Duration `yaml:"ping_interval"`
-		PongTimeout    time.Duration `yaml:"pong_timeout"`
-		MaxMessageSize int64         `yaml:"max_message_size"`
-	} `yaml:"websocket"`
+// HTTPConfig represents HTTP server configuration
+type HTTPConfig struct {
+	Address         string        `yaml:"address"`
+	ReadTimeout     time.Duration `yaml:"read_timeout"`
+	WriteTimeout    time.Duration `yaml:"write_timeout"`
+	ShutdownTimeout time.Duration `yaml:"shutdown_timeout"`
+}
 
-	// gRPC server configuration
-	GRPC struct {
-		Address              string        `yaml:"address"`
-		KeepAliveTime        time.Duration `yaml:"keep_alive_time"`
-		KeepAliveTimeout     time.Duration `yaml:"keep_alive_timeout"`
-		MaxConcurrentStreams int           `yaml:"max_concurrent_streams"`
-	} `yaml:"grpc"`
+// WebSocketConfig represents WebSocket server configuration
+type WebSocketConfig struct {
+	Address      string        `yaml:"address"`
+	Path         string        `yaml:"path"`
+	ReadTimeout  time.Duration `yaml:"read_timeout"`
+	WriteTimeout time.Duration `yaml:"write_timeout"`
+}
 
-	// WebRTC Out service address
-	WebRTCOut struct {
-		Address string `yaml:"address"`
-	} `yaml:"webrtc_out"`
+// GRPCConfig represents gRPC server configuration
+type GRPCConfig struct {
+	Address              string        `yaml:"address"`
+	KeepAliveTime        time.Duration `yaml:"keepalive_time"`
+	KeepAliveTimeout     time.Duration `yaml:"keepalive_timeout"`
+	MaxConcurrentStreams int           `yaml:"max_concurrent_streams"`
+}
 
-	// Router service address
-	Router struct {
-		Address string `yaml:"address"`
-	} `yaml:"router"`
+// LogConfig represents logging configuration
+type LogConfig struct {
+	Level  string `yaml:"level"`
+	Format string `yaml:"format"`
+}
 
-	// Logging configuration
-	Logging struct {
-		Level  string `yaml:"level"`
-		Format string `yaml:"format"`
-		Output string `yaml:"output"`
-	} `yaml:"logging"`
+// WebRTCOutConfig represents WebRTC out service configuration
+type WebRTCOutConfig struct {
+	Address string `yaml:"address"`
+}
+
+// RouterConfig represents router service configuration
+type RouterConfig struct {
+	Address string `yaml:"address"`
 }
 
 // Load loads the configuration from a file
 func Load(path string) (*Config, error) {
+	// Set default configuration
+	config := &Config{
+		HTTP: HTTPConfig{
+			Address:         ":8086",
+			ReadTimeout:     10 * time.Second,
+			WriteTimeout:    10 * time.Second,
+			ShutdownTimeout: 15 * time.Second,
+		},
+		WebSocket: WebSocketConfig{
+			Address:      ":8087",
+			Path:         "/ws",
+			ReadTimeout:  60 * time.Second,
+			WriteTimeout: 10 * time.Second,
+		},
+		GRPC: GRPCConfig{
+			Address:              ":8088",
+			KeepAliveTime:        30 * time.Second,
+			KeepAliveTimeout:     10 * time.Second,
+			MaxConcurrentStreams: 100,
+		},
+		Log: LogConfig{
+			Level:  "info",
+			Format: "text",
+		},
+		WebRTCOut: WebRTCOutConfig{
+			Address: "webrtc-out:50053",
+		},
+		Router: RouterConfig{
+			Address: "stream-router:9090",
+		},
+	}
+
 	// Read the configuration file
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -72,16 +107,12 @@ func Load(path string) (*Config, error) {
 	}
 
 	// Parse the configuration
-	config := &Config{}
 	if err := yaml.Unmarshal(data, config); err != nil {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
 
 	// Apply environment overrides
 	applyEnvironmentOverrides(config)
-
-	// Set defaults
-	setDefaults(config)
 
 	return config, nil
 }
@@ -116,92 +147,5 @@ func applyEnvironmentOverrides(config *Config) {
 	// Environment
 	if env := os.Getenv("ENVIRONMENT"); env != "" {
 		config.Service.Environment = env
-	}
-}
-
-// setDefaults sets default values
-func setDefaults(config *Config) {
-	// Set default HTTP address
-	if config.HTTP.Address == "" {
-		config.HTTP.Address = ":8086"
-	}
-
-	// Set default WebSocket address and path
-	if config.WebSocket.Address == "" {
-		config.WebSocket.Address = ":8087"
-	}
-	if config.WebSocket.Path == "" {
-		config.WebSocket.Path = "/ws"
-	}
-
-	// Set default gRPC address
-	if config.GRPC.Address == "" {
-		config.GRPC.Address = ":50052"
-	}
-
-	// Set default WebRTC Out address - Update this to use IP instead of hostname
-	if config.WebRTCOut.Address == "" {
-		// Try to use environment variable first, fallback to IP address instead of hostname
-		if os.Getenv("WEBRTC_OUT_ADDRESS") != "" {
-			config.WebRTCOut.Address = os.Getenv("WEBRTC_OUT_ADDRESS")
-		} else {
-			// Use direct IP address instead of hostname for Docker networking
-			config.WebRTCOut.Address = "172.17.0.1:50053" // Docker bridge network default gateway
-		}
-	}
-
-	// Set default Router address
-	if config.Router.Address == "" {
-		config.Router.Address = "stream-router:9090"
-	}
-
-	// Set default HTTP timeouts
-	if config.HTTP.ReadTimeout == 0 {
-		config.HTTP.ReadTimeout = 10 * time.Second
-	}
-	if config.HTTP.WriteTimeout == 0 {
-		config.HTTP.WriteTimeout = 10 * time.Second
-	}
-	if config.HTTP.ShutdownTimeout == 0 {
-		config.HTTP.ShutdownTimeout = 5 * time.Second
-	}
-
-	// Set default WebSocket timeouts
-	if config.WebSocket.ReadTimeout == 0 {
-		config.WebSocket.ReadTimeout = 60 * time.Second
-	}
-	if config.WebSocket.WriteTimeout == 0 {
-		config.WebSocket.WriteTimeout = 10 * time.Second
-	}
-	if config.WebSocket.PingInterval == 0 {
-		config.WebSocket.PingInterval = 25 * time.Second
-	}
-	if config.WebSocket.PongTimeout == 0 {
-		config.WebSocket.PongTimeout = 60 * time.Second
-	}
-	if config.WebSocket.MaxMessageSize == 0 {
-		config.WebSocket.MaxMessageSize = 1024 * 1024 // 1MB
-	}
-
-	// Set default gRPC settings
-	if config.GRPC.KeepAliveTime == 0 {
-		config.GRPC.KeepAliveTime = 60 * time.Second
-	}
-	if config.GRPC.KeepAliveTimeout == 0 {
-		config.GRPC.KeepAliveTimeout = 20 * time.Second
-	}
-	if config.GRPC.MaxConcurrentStreams == 0 {
-		config.GRPC.MaxConcurrentStreams = 100
-	}
-
-	// Set default logging configuration
-	if config.Logging.Level == "" {
-		config.Logging.Level = "info"
-	}
-	if config.Logging.Format == "" {
-		config.Logging.Format = "json"
-	}
-	if config.Logging.Output == "" {
-		config.Logging.Output = "stdout"
 	}
 }

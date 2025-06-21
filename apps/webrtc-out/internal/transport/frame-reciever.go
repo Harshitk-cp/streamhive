@@ -108,19 +108,25 @@ func (r *FrameReceiver) subscribeToAllStreams(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
-	testStreams := []string{}
+	// Start test streams immediately for debugging
+	testStreams := []string{"test-stream-1", "debug-stream"}
+
+	// Start all test streams immediately
+	for _, streamID := range testStreams {
+		go r.simulateStream(ctx, streamID)
+	}
 
 	for {
 		select {
 		case <-ticker.C:
-			// Check for each test stream if we need to start it
+			// Check for each test stream if we need to restart it
 			for _, streamID := range testStreams {
 				r.streamsMu.Lock()
 				active := r.activeStreams[streamID]
 				r.streamsMu.Unlock()
 
 				if !active {
-					// Start this stream if not already active
+					// Restart this stream if not already active
 					r.streamsMutex.RLock()
 					_, exists := r.streamContexts[streamID]
 					r.streamsMutex.RUnlock()
@@ -235,12 +241,35 @@ func (r *FrameReceiver) simulateStream(ctx context.Context, streamID string) {
 func generateDummyFrameData(size int, isKeyFrame bool) []byte {
 	data := make([]byte, size)
 
-	// Fill with some pattern
-	for i := 0; i < size; i++ {
-		if isKeyFrame {
-			data[i] = byte(i % 255) // Different pattern for key frames
-		} else {
-			data[i] = byte(255 - (i % 255))
+	if isKeyFrame {
+		// H.264 key frame with proper NAL units
+		// SPS (Sequence Parameter Set)
+		sps := []byte{0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1e, 0x8d, 0x40, 0x14, 0x1e, 0xc8}
+		// PPS (Picture Parameter Set)  
+		pps := []byte{0x00, 0x00, 0x00, 0x01, 0x68, 0xce, 0x3c, 0x80}
+		// IDR frame start
+		idr := []byte{0x00, 0x00, 0x00, 0x01, 0x65, 0x88}
+
+		copy(data, sps)
+		if len(data) > len(sps) {
+			copy(data[len(sps):], pps)
+		}
+		if len(data) > len(sps)+len(pps) {
+			copy(data[len(sps)+len(pps):], idr)
+		}
+
+		// Fill rest with pattern
+		for i := len(sps) + len(pps) + len(idr); i < size; i++ {
+			data[i] = byte(0xAA ^ (i % 255)) // Key frame pattern
+		}
+	} else {
+		// P-frame
+		pframe := []byte{0x00, 0x00, 0x00, 0x01, 0x41, 0x9a}
+		copy(data, pframe)
+
+		// Fill rest with pattern
+		for i := len(pframe); i < size; i++ {
+			data[i] = byte(0x55 ^ (i % 255)) // P-frame pattern
 		}
 	}
 

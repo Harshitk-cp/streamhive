@@ -20,6 +20,9 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
+	SignalingService_CreateOffer_FullMethodName          = "/signaling.SignalingService/CreateOffer"
+	SignalingService_CreateAnswer_FullMethodName         = "/signaling.SignalingService/CreateAnswer"
+	SignalingService_AddICECandidate_FullMethodName      = "/signaling.SignalingService/AddICECandidate"
 	SignalingService_SendSignalingMessage_FullMethodName = "/signaling.SignalingService/SendSignalingMessage"
 	SignalingService_GetStreamInfo_FullMethodName        = "/signaling.SignalingService/GetStreamInfo"
 	SignalingService_NotifyStreamEnded_FullMethodName    = "/signaling.SignalingService/NotifyStreamEnded"
@@ -31,8 +34,14 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// SignalingService handles WebRTC signaling
+// SignalingService provides WebRTC signaling functionality
 type SignalingServiceClient interface {
+	// CreateOffer creates a WebRTC offer
+	CreateOffer(ctx context.Context, in *CreateOfferRequest, opts ...grpc.CallOption) (*CreateOfferResponse, error)
+	// CreateAnswer creates a WebRTC answer
+	CreateAnswer(ctx context.Context, in *CreateAnswerRequest, opts ...grpc.CallOption) (*CreateAnswerResponse, error)
+	// AddICECandidate adds an ICE candidate
+	AddICECandidate(ctx context.Context, in *AddICECandidateRequest, opts ...grpc.CallOption) (*AddICECandidateResponse, error)
 	// SendSignalingMessage sends a signaling message
 	SendSignalingMessage(ctx context.Context, in *SignalingMessage, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// GetStreamInfo gets information about a stream
@@ -51,6 +60,36 @@ type signalingServiceClient struct {
 
 func NewSignalingServiceClient(cc grpc.ClientConnInterface) SignalingServiceClient {
 	return &signalingServiceClient{cc}
+}
+
+func (c *signalingServiceClient) CreateOffer(ctx context.Context, in *CreateOfferRequest, opts ...grpc.CallOption) (*CreateOfferResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateOfferResponse)
+	err := c.cc.Invoke(ctx, SignalingService_CreateOffer_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *signalingServiceClient) CreateAnswer(ctx context.Context, in *CreateAnswerRequest, opts ...grpc.CallOption) (*CreateAnswerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateAnswerResponse)
+	err := c.cc.Invoke(ctx, SignalingService_CreateAnswer_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *signalingServiceClient) AddICECandidate(ctx context.Context, in *AddICECandidateRequest, opts ...grpc.CallOption) (*AddICECandidateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AddICECandidateResponse)
+	err := c.cc.Invoke(ctx, SignalingService_AddICECandidate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *signalingServiceClient) SendSignalingMessage(ctx context.Context, in *SignalingMessage, opts ...grpc.CallOption) (*emptypb.Empty, error) {
@@ -110,8 +149,14 @@ type SignalingService_StreamSignalingClient = grpc.BidiStreamingClient[Signaling
 // All implementations must embed UnimplementedSignalingServiceServer
 // for forward compatibility.
 //
-// SignalingService handles WebRTC signaling
+// SignalingService provides WebRTC signaling functionality
 type SignalingServiceServer interface {
+	// CreateOffer creates a WebRTC offer
+	CreateOffer(context.Context, *CreateOfferRequest) (*CreateOfferResponse, error)
+	// CreateAnswer creates a WebRTC answer
+	CreateAnswer(context.Context, *CreateAnswerRequest) (*CreateAnswerResponse, error)
+	// AddICECandidate adds an ICE candidate
+	AddICECandidate(context.Context, *AddICECandidateRequest) (*AddICECandidateResponse, error)
 	// SendSignalingMessage sends a signaling message
 	SendSignalingMessage(context.Context, *SignalingMessage) (*emptypb.Empty, error)
 	// GetStreamInfo gets information about a stream
@@ -132,6 +177,15 @@ type SignalingServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedSignalingServiceServer struct{}
 
+func (UnimplementedSignalingServiceServer) CreateOffer(context.Context, *CreateOfferRequest) (*CreateOfferResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateOffer not implemented")
+}
+func (UnimplementedSignalingServiceServer) CreateAnswer(context.Context, *CreateAnswerRequest) (*CreateAnswerResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateAnswer not implemented")
+}
+func (UnimplementedSignalingServiceServer) AddICECandidate(context.Context, *AddICECandidateRequest) (*AddICECandidateResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AddICECandidate not implemented")
+}
 func (UnimplementedSignalingServiceServer) SendSignalingMessage(context.Context, *SignalingMessage) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SendSignalingMessage not implemented")
 }
@@ -166,6 +220,60 @@ func RegisterSignalingServiceServer(s grpc.ServiceRegistrar, srv SignalingServic
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&SignalingService_ServiceDesc, srv)
+}
+
+func _SignalingService_CreateOffer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateOfferRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SignalingServiceServer).CreateOffer(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SignalingService_CreateOffer_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SignalingServiceServer).CreateOffer(ctx, req.(*CreateOfferRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SignalingService_CreateAnswer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateAnswerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SignalingServiceServer).CreateAnswer(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SignalingService_CreateAnswer_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SignalingServiceServer).CreateAnswer(ctx, req.(*CreateAnswerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SignalingService_AddICECandidate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddICECandidateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SignalingServiceServer).AddICECandidate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SignalingService_AddICECandidate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SignalingServiceServer).AddICECandidate(ctx, req.(*AddICECandidateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _SignalingService_SendSignalingMessage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -254,6 +362,18 @@ var SignalingService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "signaling.SignalingService",
 	HandlerType: (*SignalingServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "CreateOffer",
+			Handler:    _SignalingService_CreateOffer_Handler,
+		},
+		{
+			MethodName: "CreateAnswer",
+			Handler:    _SignalingService_CreateAnswer_Handler,
+		},
+		{
+			MethodName: "AddICECandidate",
+			Handler:    _SignalingService_AddICECandidate_Handler,
+		},
 		{
 			MethodName: "SendSignalingMessage",
 			Handler:    _SignalingService_SendSignalingMessage_Handler,

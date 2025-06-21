@@ -1,4 +1,3 @@
-// apps/websocket-signaling/internal/service/signaling.go
 package service
 
 import (
@@ -6,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"math/rand"
 	"strings"
 	"sync"
 	"time"
@@ -20,16 +18,18 @@ import (
 	webrtcpb "github.com/Harshitk-cp/streamhive/libs/proto/webrtc"
 )
 
-// SignalingService handles WebRTC signaling
+// SignalingService handles WebRTC signaling logic
 type SignalingService struct {
 	cfg            *config.Config
 	streams        map[string]*StreamSession
-	clients        map[string]*ClientSession
 	streamsMutex   sync.RWMutex
+	clients        map[string]*ClientSession
 	clientsMutex   sync.RWMutex
 	messageChannel chan model.SignalingMessage
-	cleanupTicker  *time.Ticker
 	stopChan       chan struct{}
+	cleanupTicker  *time.Ticker
+	ctx            context.Context
+	cancel         context.CancelFunc
 }
 
 // StreamSession represents an active stream session
@@ -39,6 +39,10 @@ type StreamSession struct {
 	CreatedAt    time.Time
 	LastActivity time.Time
 	Mutex        sync.RWMutex
+	// Legacy fields for compatibility
+	IsActive    bool
+	ViewerCount int
+	Title       string
 }
 
 // ClientSession represents a connected client
@@ -50,6 +54,15 @@ type ClientSession struct {
 	IsPublisher  bool
 	CreatedAt    time.Time
 	LastActivity time.Time
+}
+
+// Stream represents an active stream (for API compatibility)
+type Stream struct {
+	ID          string    `json:"id"`
+	Title       string    `json:"title"`
+	CreatedAt   time.Time `json:"created_at"`
+	IsActive    bool      `json:"is_active"`
+	ViewerCount int       `json:"viewer_count"`
 }
 
 // NewSignalingService creates a new signaling service
@@ -65,27 +78,26 @@ func NewSignalingService(cfg *config.Config) *SignalingService {
 
 // Start starts the signaling service
 func (s *SignalingService) Start(ctx context.Context) {
-	// Start message processing goroutine
-	go s.processMessages()
-
-	// Start cleanup goroutine
-	s.cleanupTicker = time.NewTicker(5 * time.Minute)
-	go s.cleanupInactiveConnections(ctx)
-
+	s.ctx, s.cancel = context.WithCancel(ctx)
 	log.Println("Signaling service started")
+	
+	// Start background tasks
+	go s.processMessages()
+	go s.cleanupInactiveConnections(ctx)
 }
 
 // Stop stops the signaling service
 func (s *SignalingService) Stop() {
-	// Signal all goroutines to stop
+	if s.cancel != nil {
+		s.cancel()
+	}
+	
 	close(s.stopChan)
 
-	// Stop cleanup ticker
 	if s.cleanupTicker != nil {
 		s.cleanupTicker.Stop()
 	}
 
-	// Close all client channels
 	s.clientsMutex.Lock()
 	for _, client := range s.clients {
 		close(client.SendChannel)
@@ -95,18 +107,111 @@ func (s *SignalingService) Stop() {
 	log.Println("Signaling service stopped")
 }
 
+// GetActiveStreams returns a list of active streams
+func (s *SignalingService) GetActiveStreams() []*Stream {
+	s.streamsMutex.RLock()
+	defer s.streamsMutex.RUnlock()
+	
+	var activeStreams []*Stream
+	for _, streamSession := range s.streams {
+		if streamSession.IsActive {
+			stream := &Stream{
+				ID:          streamSession.StreamID,
+				Title:       streamSession.Title,
+				CreatedAt:   streamSession.CreatedAt,
+				IsActive:    streamSession.IsActive,
+				ViewerCount: streamSession.ViewerCount,
+			}
+			activeStreams = append(activeStreams, stream)
+		}
+	}
+	
+	return activeStreams
+}
+
+// CreateStream creates a new stream
+func (s *SignalingService) CreateStream(streamID, title string) *Stream {
+	s.streamsMutex.Lock()
+	defer s.streamsMutex.Unlock()
+	
+	streamSession := &StreamSession{
+		StreamID:     streamID,
+		Title:        title,
+		CreatedAt:    time.Now(),
+		IsActive:     true,
+		ViewerCount:  0,
+		Clients:      make(map[string]*ClientSession),
+		LastActivity: time.Now(),
+	}
+	
+	s.streams[streamID] = streamSession
+	log.Printf("Created stream: %s", streamID)
+	
+	return &Stream{
+		ID:          streamID,
+		Title:       title,
+		CreatedAt:   streamSession.CreatedAt,
+		IsActive:    true,
+		ViewerCount: 0,
+	}
+}
+
+// GetStream returns a stream by ID
+func (s *SignalingService) GetStream(streamID string) (*Stream, bool) {
+	s.streamsMutex.RLock()
+	defer s.streamsMutex.RUnlock()
+	
+	streamSession, exists := s.streams[streamID]
+	if !exists {
+		return nil, false
+	}
+	
+	stream := &Stream{
+		ID:          streamSession.StreamID,
+		Title:       streamSession.Title,
+		CreatedAt:   streamSession.CreatedAt,
+		IsActive:    streamSession.IsActive,
+		ViewerCount: streamSession.ViewerCount,
+	}
+	
+	return stream, true
+}
+
+// UpdateViewerCount updates the viewer count for a stream
+func (s *SignalingService) UpdateViewerCount(streamID string, delta int) {
+	s.streamsMutex.Lock()
+	defer s.streamsMutex.Unlock()
+	
+	if stream, exists := s.streams[streamID]; exists {
+		stream.ViewerCount += delta
+		if stream.ViewerCount < 0 {
+			stream.ViewerCount = 0
+		}
+		log.Printf("Stream %s viewer count: %d", streamID, stream.ViewerCount)
+	}
+}
+
+// DeactivateStream marks a stream as inactive
+func (s *SignalingService) DeactivateStream(streamID string) {
+	s.streamsMutex.Lock()
+	defer s.streamsMutex.Unlock()
+	
+	if stream, exists := s.streams[streamID]; exists {
+		stream.IsActive = false
+		log.Printf("Deactivated stream: %s", streamID)
+	}
+}
+
 // RegisterClient registers a new client
 func (s *SignalingService) RegisterClient(clientID, streamID string, sendChan chan model.SignalingMessage, isPublisher bool) error {
 	s.clientsMutex.Lock()
 	defer s.clientsMutex.Unlock()
 
-	// Check if client already exists - if so, unregister first to clean up properly
+	// Check if client already exists
 	if existingClient, exists := s.clients[clientID]; exists {
 		log.Printf("Client %s already exists, cleaning up previous session", clientID)
-		// Close existing send channel
 		close(existingClient.SendChannel)
 
-		// Remove from previous stream if different
 		if existingClient.StreamID != streamID {
 			s.streamsMutex.Lock()
 			if stream, streamExists := s.streams[existingClient.StreamID]; streamExists {
@@ -114,7 +219,6 @@ func (s *SignalingService) RegisterClient(clientID, streamID string, sendChan ch
 				delete(stream.Clients, clientID)
 				stream.Mutex.Unlock()
 
-				// Check if stream is now empty
 				if len(stream.Clients) == 0 {
 					delete(s.streams, existingClient.StreamID)
 					log.Printf("Removed empty stream: %s", existingClient.StreamID)
@@ -123,7 +227,6 @@ func (s *SignalingService) RegisterClient(clientID, streamID string, sendChan ch
 			s.streamsMutex.Unlock()
 		}
 
-		// Remove from clients map
 		delete(s.clients, clientID)
 	}
 
@@ -138,10 +241,9 @@ func (s *SignalingService) RegisterClient(clientID, streamID string, sendChan ch
 		LastActivity: time.Now(),
 	}
 
-	// Add to clients map
 	s.clients[clientID] = client
 
-	// Get or create stream session with proper locking
+	// Get or create stream session
 	s.streamsMutex.Lock()
 	stream, exists := s.streams[streamID]
 	if !exists {
@@ -150,12 +252,13 @@ func (s *SignalingService) RegisterClient(clientID, streamID string, sendChan ch
 			Clients:      make(map[string]*ClientSession),
 			CreatedAt:    time.Now(),
 			LastActivity: time.Now(),
+			IsActive:     true,
 		}
 		s.streams[streamID] = stream
 	}
 	s.streamsMutex.Unlock()
 
-	// Add client to stream with proper locking
+	// Add client to stream
 	stream.Mutex.Lock()
 	stream.Clients[clientID] = client
 	stream.LastActivity = time.Now()
@@ -174,14 +277,10 @@ func (s *SignalingService) UnregisterClient(clientID string) {
 		return
 	}
 
-	// Get streamID before deleting the client
 	streamID := client.StreamID
-
-	// Delete from clients map
 	delete(s.clients, clientID)
 	s.clientsMutex.Unlock()
 
-	// Remove client from stream with proper locking
 	s.streamsMutex.Lock()
 	stream, streamExists := s.streams[streamID]
 	if streamExists {
@@ -190,7 +289,6 @@ func (s *SignalingService) UnregisterClient(clientID string) {
 		clientCount := len(stream.Clients)
 		stream.Mutex.Unlock()
 
-		// If no clients left in stream, remove stream
 		if clientCount == 0 {
 			delete(s.streams, streamID)
 			log.Printf("Removed empty stream: %s", streamID)
@@ -203,7 +301,6 @@ func (s *SignalingService) UnregisterClient(clientID string) {
 
 // HandleMessage handles a signaling message
 func (s *SignalingService) HandleMessage(msg model.SignalingMessage) {
-	// Update client activity timestamp
 	s.clientsMutex.RLock()
 	client, exists := s.clients[msg.SenderID]
 	s.clientsMutex.RUnlock()
@@ -212,7 +309,6 @@ func (s *SignalingService) HandleMessage(msg model.SignalingMessage) {
 		client.LastActivity = time.Now()
 	}
 
-	// Update stream activity timestamp
 	s.streamsMutex.RLock()
 	stream, streamExists := s.streams[msg.StreamID]
 	s.streamsMutex.RUnlock()
@@ -221,7 +317,6 @@ func (s *SignalingService) HandleMessage(msg model.SignalingMessage) {
 		stream.LastActivity = time.Now()
 	}
 
-	// Send message to processing channel
 	s.messageChannel <- msg
 }
 
@@ -239,7 +334,6 @@ func (s *SignalingService) processMessages() {
 
 // routeMessage routes a signaling message to the appropriate recipient
 func (s *SignalingService) routeMessage(msg model.SignalingMessage) {
-	// If recipient is specified, send directly to recipient
 	if msg.RecipientID != "" && msg.RecipientID != "server" {
 		s.clientsMutex.RLock()
 		recipient, exists := s.clients[msg.RecipientID]
@@ -250,33 +344,26 @@ func (s *SignalingService) routeMessage(msg model.SignalingMessage) {
 			case recipient.SendChannel <- msg:
 				// Message sent
 			default:
-				// Channel full or closed, log error
 				log.Printf("Failed to send message to client %s: channel full or closed", msg.RecipientID)
 			}
 		}
 		return
 	}
 
-	// Handle messages directed to the server
 	if msg.RecipientID == "server" {
 		switch msg.Type {
 		case "offer":
-			// Forward offer to WebRTC Out
 			s.handleOffer(msg)
 		case "answer":
-			// Received answer from a viewer, forward to publisher
 			s.handleAnswer(msg)
 		case "ice_candidate":
-			// Forward ICE candidate
 			s.handleICECandidate(msg)
 		case "ping":
-			// Respond with pong
 			s.handlePing(msg)
 		}
 		return
 	}
 
-	// If no specific recipient, broadcast to all clients in the stream
 	s.streamsMutex.RLock()
 	stream, exists := s.streams[msg.StreamID]
 	s.streamsMutex.RUnlock()
@@ -286,7 +373,6 @@ func (s *SignalingService) routeMessage(msg model.SignalingMessage) {
 		return
 	}
 
-	// Broadcast to all clients in stream except sender
 	stream.Mutex.RLock()
 	for clientID, client := range stream.Clients {
 		if clientID != msg.SenderID && client.Connected {
@@ -294,7 +380,6 @@ func (s *SignalingService) routeMessage(msg model.SignalingMessage) {
 			case client.SendChannel <- msg:
 				// Message sent
 			default:
-				// Channel full or closed, log error
 				log.Printf("Failed to broadcast message to client %s: channel full or closed", clientID)
 			}
 		}
@@ -306,10 +391,6 @@ func (s *SignalingService) routeMessage(msg model.SignalingMessage) {
 func (s *SignalingService) handleOffer(msg model.SignalingMessage) {
 	log.Printf("Received offer from %s for stream %s", msg.SenderID, msg.StreamID)
 
-	// Parse offer payload
-	var offerSDP string
-
-	// Extract SDP with improved parsing
 	offerSDP, err := extractSDP(msg.Payload)
 	if err != nil {
 		log.Printf("Error extracting SDP: %v", err)
@@ -317,17 +398,14 @@ func (s *SignalingService) handleOffer(msg model.SignalingMessage) {
 		return
 	}
 
-	// Log SDP length and validate
 	log.Printf("SDP offer length: %d bytes", len(offerSDP))
 
-	// Make sure SDP looks valid
 	if !isValidSDP(offerSDP) {
 		log.Printf("Invalid SDP format")
 		s.sendErrorResponse(msg.SenderID, msg.StreamID, "invalid_offer", "Invalid SDP format")
 		return
 	}
 
-	// Connect to WebRTC-out service via gRPC with improved error handling
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -339,7 +417,6 @@ func (s *SignalingService) handleOffer(msg model.SignalingMessage) {
 	}
 	defer conn.Close()
 
-	// Forward offer to WebRTC-out service
 	log.Printf("Sending offer to WebRTC-out service for stream %s (size: %d bytes)", msg.StreamID, len(offerSDP))
 	req := &webrtcpb.OfferRequest{
 		StreamId: msg.StreamID,
@@ -350,7 +427,6 @@ func (s *SignalingService) handleOffer(msg model.SignalingMessage) {
 	resp, err := webrtcClient.HandleOffer(ctx, req)
 	if err != nil {
 		log.Printf("Failed to handle offer: %v", err)
-		// Enhanced error handling
 		if strings.Contains(err.Error(), "EOF") || strings.Contains(err.Error(), "message size") {
 			log.Printf("Connection error detected - likely an issue with message size. SDP size: %d bytes", len(offerSDP))
 			s.sendErrorResponse(msg.SenderID, msg.StreamID, "connection_error", "WebRTC service error. Please try again.")
@@ -362,7 +438,6 @@ func (s *SignalingService) handleOffer(msg model.SignalingMessage) {
 		return
 	}
 
-	// Verify SDP answer
 	if !isValidSDP(resp.Answer) {
 		log.Printf("Invalid SDP answer received from WebRTC service")
 		s.sendErrorResponse(msg.SenderID, msg.StreamID, "internal_error", "Invalid answer received from WebRTC service")
@@ -371,7 +446,6 @@ func (s *SignalingService) handleOffer(msg model.SignalingMessage) {
 
 	log.Printf("Received valid SDP answer from WebRTC service, length: %d bytes", len(resp.Answer))
 
-	// Send answer back with proper JSON structure
 	answerData := map[string]string{
 		"sdp": resp.Answer,
 	}
@@ -383,13 +457,12 @@ func (s *SignalingService) handleOffer(msg model.SignalingMessage) {
 		return
 	}
 
-	// Create answer message
 	answer := model.SignalingMessage{
 		Type:        "answer",
 		StreamID:    msg.StreamID,
 		SenderID:    "server",
 		RecipientID: msg.SenderID,
-		Payload:     json.RawMessage(answerBytes),
+		Payload:     answerBytes,
 	}
 
 	s.clientsMutex.RLock()
@@ -408,7 +481,6 @@ func (s *SignalingService) handleOffer(msg model.SignalingMessage) {
 
 // sendErrorResponse sends an error response to a client
 func (s *SignalingService) sendErrorResponse(clientID, streamID, errorCode, errorMessage string) {
-	// Create a properly structured error object
 	errorData := struct {
 		Code    string `json:"code"`
 		Message string `json:"message"`
@@ -447,7 +519,6 @@ func (s *SignalingService) sendErrorResponse(clientID, streamID, errorCode, erro
 
 // handleAnswer handles SDP answer messages
 func (s *SignalingService) handleAnswer(msg model.SignalingMessage) {
-	// Find the publisher for this stream
 	s.streamsMutex.RLock()
 	stream, exists := s.streams[msg.StreamID]
 	s.streamsMutex.RUnlock()
@@ -457,7 +528,6 @@ func (s *SignalingService) handleAnswer(msg model.SignalingMessage) {
 		return
 	}
 
-	// Find the publisher client
 	var publisherID string
 	stream.Mutex.RLock()
 	for clientID, client := range stream.Clients {
@@ -473,7 +543,6 @@ func (s *SignalingService) handleAnswer(msg model.SignalingMessage) {
 		return
 	}
 
-	// Forward answer to publisher
 	forwardMsg := model.SignalingMessage{
 		Type:        "answer",
 		StreamID:    msg.StreamID,
@@ -498,7 +567,6 @@ func (s *SignalingService) handleAnswer(msg model.SignalingMessage) {
 
 // handleICECandidate handles ICE candidate messages
 func (s *SignalingService) handleICECandidate(msg model.SignalingMessage) {
-	// If recipient is specified, forward directly
 	if msg.RecipientID != "" && msg.RecipientID != "server" {
 		s.clientsMutex.RLock()
 		recipient, exists := s.clients[msg.RecipientID]
@@ -515,7 +583,6 @@ func (s *SignalingService) handleICECandidate(msg model.SignalingMessage) {
 		return
 	}
 
-	// If no specific recipient, try to find the publisher/viewer counterpart
 	s.streamsMutex.RLock()
 	stream, exists := s.streams[msg.StreamID]
 	s.streamsMutex.RUnlock()
@@ -525,7 +592,6 @@ func (s *SignalingService) handleICECandidate(msg model.SignalingMessage) {
 		return
 	}
 
-	// Determine if sender is publisher or viewer
 	s.clientsMutex.RLock()
 	sender, senderExists := s.clients[msg.SenderID]
 	s.clientsMutex.RUnlock()
@@ -537,11 +603,9 @@ func (s *SignalingService) handleICECandidate(msg model.SignalingMessage) {
 
 	isPublisher := sender.IsPublisher
 
-	// Forward to opposite role (publisher->viewers or viewer->publisher)
 	stream.Mutex.RLock()
 	for clientID, client := range stream.Clients {
 		if clientID != msg.SenderID && client.IsPublisher != isPublisher {
-			// Create message for recipient
 			forwardMsg := model.SignalingMessage{
 				Type:        "ice_candidate",
 				StreamID:    msg.StreamID,
@@ -563,13 +627,12 @@ func (s *SignalingService) handleICECandidate(msg model.SignalingMessage) {
 
 // handlePing handles ping messages
 func (s *SignalingService) handlePing(msg model.SignalingMessage) {
-	// Send pong response
 	pong := model.SignalingMessage{
 		Type:        "pong",
 		StreamID:    msg.StreamID,
 		SenderID:    "server",
 		RecipientID: msg.SenderID,
-		Payload:     msg.Payload, // Echo back the timestamp
+		Payload:     msg.Payload,
 	}
 
 	s.clientsMutex.RLock()
@@ -579,116 +642,54 @@ func (s *SignalingService) handlePing(msg model.SignalingMessage) {
 	if exists && client.Connected {
 		select {
 		case client.SendChannel <- pong:
-			// Pong sent
+			// Pong sent successfully
 		default:
-			log.Printf("Failed to send pong to %s: channel full or closed", msg.SenderID)
+			log.Printf("Failed to send pong to client %s: channel full or closed", msg.SenderID)
 		}
 	}
 }
 
-// getWebRTCServiceClient gets a client for the WebRTC service with retry logic
+// getWebRTCServiceClient gets a client for the WebRTC service
 func (s *SignalingService) getWebRTCServiceClient() (webrtcpb.WebRTCServiceClient, *grpc.ClientConn, error) {
-	// Try to connect with exponential backoff
 	var conn *grpc.ClientConn
 	var err error
 	maxRetries := 3
 
-	// Define connection options once
 	dialOpts := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithBlock(),
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
-			Time:                10 * time.Second, // Increased from 5s to 10s
-			Timeout:             3 * time.Second,  // Increased from 2s to 3s
+			Time:                10 * time.Second,
+			Timeout:             3 * time.Second,
 			PermitWithoutStream: true,
 		}),
-		grpc.WithTimeout(10 * time.Second), // Increased timeout for connection
-		// Handle larger message sizes
+		grpc.WithTimeout(10 * time.Second),
 		grpc.WithDefaultCallOptions(
-			grpc.MaxCallRecvMsgSize(20*1024*1024), // 20MB max receive
-			grpc.MaxCallSendMsgSize(20*1024*1024), // 20MB max send
+			grpc.MaxCallRecvMsgSize(20*1024*1024),
+			grpc.MaxCallSendMsgSize(20*1024*1024),
 		),
 	}
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
-		if attempt > 0 {
-			log.Printf("Retrying connection to WebRTC service (attempt %d/%d)", attempt+1, maxRetries)
-			// Exponential backoff with jitter for more efficient retry strategy
-			backoffTime := time.Duration(100*(1<<attempt)) * time.Millisecond
-			jitter := time.Duration(rand.Intn(100)) * time.Millisecond
-			time.Sleep(backoffTime + jitter)
-		}
-
-		// Connect with optimized options
 		conn, err = grpc.Dial(s.cfg.WebRTCOut.Address, dialOpts...)
-
 		if err == nil {
-			// Successfully connected
 			break
 		}
 
-		log.Printf("Attempt %d: Failed to connect to WebRTC service: %v", attempt+1, err)
+		if attempt < maxRetries-1 {
+			waitTime := time.Duration(attempt+1) * time.Second
+			log.Printf("Failed to connect to WebRTC service (attempt %d/%d), retrying in %v: %v",
+				attempt+1, maxRetries, waitTime, err)
+			time.Sleep(waitTime)
+		}
 	}
 
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to connect to WebRTC-out service after %d attempts: %w", maxRetries, err)
+		return nil, nil, fmt.Errorf("failed to connect to WebRTC service after %d attempts: %w", maxRetries, err)
 	}
 
-	// Create client
 	client := webrtcpb.NewWebRTCServiceClient(conn)
 	return client, conn, nil
-}
-
-// Helper functions for SDP handling
-func extractSDP(payload interface{}) (string, error) {
-	var payloadStr string
-
-	// Convert payload to string based on type
-	switch p := payload.(type) {
-	case []byte:
-		payloadStr = string(p)
-	case string:
-		payloadStr = p
-	default:
-		// Try to marshal to JSON
-		payloadBytes, err := json.Marshal(payload)
-		if err != nil {
-			return "", fmt.Errorf("could not marshal payload: %v", err)
-		}
-		payloadStr = string(payloadBytes)
-	}
-
-	// Try different extraction methods
-
-	// 1. Check if it's already a valid SDP
-	if strings.HasPrefix(strings.TrimSpace(payloadStr), "v=0") {
-		return payloadStr, nil
-	}
-
-	// 2. Try JSON object with sdp field
-	var offerObject map[string]interface{}
-	if err := json.Unmarshal([]byte(payloadStr), &offerObject); err == nil {
-		if sdp, ok := offerObject["sdp"].(string); ok {
-			return sdp, nil
-		}
-	}
-
-	// 3. Try JSON string
-	var sdpString string
-	if err := json.Unmarshal([]byte(payloadStr), &sdpString); err == nil {
-		if strings.HasPrefix(strings.TrimSpace(sdpString), "v=0") {
-			return sdpString, nil
-		}
-	}
-
-	return "", fmt.Errorf("could not extract SDP from payload")
-}
-
-func isValidSDP(sdp string) bool {
-	sdp = strings.TrimSpace(sdp)
-	return strings.HasPrefix(sdp, "v=0") &&
-		strings.Contains(sdp, "m=") && // At least one media section
-		len(sdp) > 50 // Reasonable minimum length
 }
 
 // GetClientCount returns the number of clients connected to a stream
@@ -702,10 +703,8 @@ func (s *SignalingService) GetClientCount(streamID string) int {
 	}
 
 	stream.Mutex.RLock()
-	count := len(stream.Clients)
-	stream.Mutex.RUnlock()
-
-	return count
+	defer stream.Mutex.RUnlock()
+	return len(stream.Clients)
 }
 
 // GetTotalClientCount returns the total number of connected clients
@@ -713,64 +712,102 @@ func (s *SignalingService) GetTotalClientCount() int {
 	s.clientsMutex.RLock()
 	defer s.clientsMutex.RUnlock()
 
-	return len(s.clients)
+	connected := 0
+	for _, client := range s.clients {
+		if client.Connected {
+			connected++
+		}
+	}
+	return connected
 }
 
 // cleanupInactiveConnections removes inactive connections
 func (s *SignalingService) cleanupInactiveConnections(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
 	for {
 		select {
-		case <-s.cleanupTicker.C:
-			// Set timeout threshold (10 minutes)
-			timeout := time.Now().Add(-10 * time.Minute)
-
-			// Find inactive clients
-			var inactiveClients []string
-
-			s.clientsMutex.RLock()
-			for clientID, client := range s.clients {
-				if client.LastActivity.Before(timeout) {
-					inactiveClients = append(inactiveClients, clientID)
-				}
-			}
-			s.clientsMutex.RUnlock()
-
-			// Remove inactive clients
-			for _, clientID := range inactiveClients {
-				log.Printf("Removing inactive client: %s", clientID)
-				s.UnregisterClient(clientID)
-			}
-
-			// Find empty streams
-			var emptyStreams []string
-
-			s.streamsMutex.RLock()
-			for streamID, stream := range s.streams {
-				stream.Mutex.RLock()
-				clientCount := len(stream.Clients)
-				stream.Mutex.RUnlock()
-
-				if clientCount == 0 {
-					emptyStreams = append(emptyStreams, streamID)
-				}
-			}
-			s.streamsMutex.RUnlock()
-
-			// Remove empty streams
-			if len(emptyStreams) > 0 {
-				s.streamsMutex.Lock()
-				for _, streamID := range emptyStreams {
-					log.Printf("Removing empty stream: %s", streamID)
-					delete(s.streams, streamID)
-				}
-				s.streamsMutex.Unlock()
-			}
-
+		case <-ticker.C:
+			s.performCleanup()
 		case <-ctx.Done():
 			return
-
 		case <-s.stopChan:
 			return
 		}
 	}
+}
+
+// performCleanup removes inactive connections
+func (s *SignalingService) performCleanup() {
+	now := time.Now()
+	var disconnectedClients []string
+
+	s.clientsMutex.RLock()
+	for clientID, client := range s.clients {
+		if now.Sub(client.LastActivity) > 10*time.Minute {
+			disconnectedClients = append(disconnectedClients, clientID)
+		}
+	}
+	s.clientsMutex.RUnlock()
+
+	for _, clientID := range disconnectedClients {
+		log.Printf("Cleaning up inactive client: %s", clientID)
+		s.UnregisterClient(clientID)
+	}
+}
+
+// Helper functions for SDP handling
+func extractSDP(payload interface{}) (string, error) {
+	var payloadStr string
+	switch p := payload.(type) {
+	case string:
+		payloadStr = p
+	case []byte:
+		payloadStr = string(p)
+	default:
+		if jsonBytes, err := json.Marshal(payload); err == nil {
+			payloadStr = string(jsonBytes)
+		} else {
+			return "", fmt.Errorf("unsupported payload type: %T", payload)
+		}
+	}
+
+	payloadStr = strings.TrimSpace(payloadStr)
+
+	if strings.HasPrefix(payloadStr, "v=0") {
+		return payloadStr, nil
+	}
+
+	if strings.HasPrefix(payloadStr, "{") {
+		var sdpObj map[string]interface{}
+		if err := json.Unmarshal([]byte(payloadStr), &sdpObj); err == nil {
+			if sdp, ok := sdpObj["sdp"].(string); ok {
+				return strings.TrimSpace(sdp), nil
+			}
+		}
+	}
+
+	if strings.HasPrefix(payloadStr, "\"") && strings.HasSuffix(payloadStr, "\"") {
+		var sdpStr string
+		if err := json.Unmarshal([]byte(payloadStr), &sdpStr); err == nil {
+			return strings.TrimSpace(sdpStr), nil
+		}
+	}
+
+	return payloadStr, nil
+}
+
+func isValidSDP(sdp string) bool {
+	sdp = strings.TrimSpace(sdp)
+	if !strings.HasPrefix(sdp, "v=0") {
+		return false
+	}
+
+	hasOrigin := strings.Contains(sdp, "o=")
+	hasSession := strings.Contains(sdp, "s=")
+	hasConnection := strings.Contains(sdp, "c=")
+	hasMedia := strings.Contains(sdp, "m=audio") || strings.Contains(sdp, "m=video")
+
+	return hasOrigin && hasSession && hasConnection && hasMedia
 }

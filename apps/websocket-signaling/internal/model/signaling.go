@@ -12,7 +12,7 @@ type SignalingMessage struct {
 	StreamID    string      `json:"stream_id"`
 	SenderID    string      `json:"sender_id"`
 	RecipientID string      `json:"recipient_id,omitempty"`
-	Payload     interface{} `json:"payload"` // Changed from json.RawMessage to interface{}
+	Payload     []byte      `json:"payload"` // Changed to []byte for consistency
 	Timestamp   int64       `json:"timestamp,omitempty"`
 }
 

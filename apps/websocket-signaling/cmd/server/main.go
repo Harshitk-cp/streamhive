@@ -46,7 +46,7 @@ func main() {
 
 	// Create router for WebSocket
 	wsRouter := http.NewServeMux()
-	wsRouter.Handle(cfg.WebSocket.Path, wsHandler)
+	wsRouter.Handle(cfg.WebSocket.Path, http.HandlerFunc(wsHandler.HandleWebSocket))
 
 	// Initialize HTTP server for REST API and health checks
 	httpServer := &http.Server{

@@ -7,8 +7,17 @@ import "google/protobuf/empty.proto";
 
 option go_package = "libs/proto/signaling";
 
-// SignalingService handles WebRTC signaling
+// SignalingService provides WebRTC signaling functionality
 service SignalingService {
+  // CreateOffer creates a WebRTC offer
+  rpc CreateOffer(CreateOfferRequest) returns (CreateOfferResponse);
+  
+  // CreateAnswer creates a WebRTC answer
+  rpc CreateAnswer(CreateAnswerRequest) returns (CreateAnswerResponse);
+  
+  // AddICECandidate adds an ICE candidate
+  rpc AddICECandidate(AddICECandidateRequest) returns (AddICECandidateResponse);
+
   // SendSignalingMessage sends a signaling message
   rpc SendSignalingMessage(SignalingMessage) returns (google.protobuf.Empty);
 
@@ -59,4 +68,52 @@ message NotifyStreamEndedRequest {
 message SignalingStats {
   int32 connected_clients = 1;
   google.protobuf.Timestamp timestamp = 2;
+}
+
+// SessionDescription represents an SDP session description
+message SessionDescription {
+  string type = 1;
+  string sdp = 2;
+}
+
+// ICECandidate represents an ICE candidate
+message ICECandidate {
+  string candidate = 1;
+  string sdp_mid = 2;
+  int32 sdp_mline_index = 3;
+}
+
+// CreateOfferRequest is the request for creating an offer
+message CreateOfferRequest {
+  string stream_id = 1;
+  string client_id = 2;
+}
+
+// CreateOfferResponse is the response for creating an offer
+message CreateOfferResponse {
+  SessionDescription offer = 1;
+}
+
+// CreateAnswerRequest is the request for creating an answer
+message CreateAnswerRequest {
+  string stream_id = 1;
+  string client_id = 2;
+  SessionDescription offer = 3;
+}
+
+// CreateAnswerResponse is the response for creating an answer
+message CreateAnswerResponse {
+  SessionDescription answer = 1;
+}
+
+// AddICECandidateRequest is the request for adding an ICE candidate
+message AddICECandidateRequest {
+  string stream_id = 1;
+  string client_id = 2;
+  ICECandidate candidate = 3;
+}
+
+// AddICECandidateResponse is the response for adding an ICE candidate
+message AddICECandidateResponse {
+  bool success = 1;
 }

@@ -9,26 +9,23 @@ service:
 
 # HTTP server configuration
 http:
-  address: :8086
+  address: ":8086"
   read_timeout: 10s
   write_timeout: 10s
-  shutdown_timeout: 5s
+  shutdown_timeout: 15s
 
 # WebSocket server configuration
 websocket:
-  address: :8087
-  path: /ws
+  address: ":8087"
+  path: "/ws"
   read_timeout: 60s
   write_timeout: 10s
-  ping_interval: 25s
-  pong_timeout: 60s
-  max_message_size: 1048576  # 1MB
 
 # gRPC server configuration
 grpc:
-  address: :50052
-  keep_alive_time: 60s
-  keep_alive_timeout: 20s
+  address: ":8088"
+  keepalive_time: 30s
+  keepalive_timeout: 10s
   max_concurrent_streams: 100
 
 # WebRTC out service
@@ -40,7 +37,6 @@ router:
   address: stream-router:9090
 
 # Logging configuration
-logging:
-  level: info
-  format: json
-  output: stdout
+log:
+  level: "info"
+  format: "text"
